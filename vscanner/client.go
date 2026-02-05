@@ -629,7 +629,7 @@ func (c *Client) doGetRaw(ctx context.Context, path string, params map[string]st
 
 	reqURL := c.baseURL + path
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}

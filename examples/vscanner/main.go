@@ -74,8 +74,8 @@ func showProjectDetails(ctx context.Context, client *vscanner.Client, projectID 
 	}
 
 	fmt.Printf("Found %d tasks:\n", len(tasks))
-	for _, t := range tasks {
-		fmt.Printf("  - %s: %s (Status: %s)\n", t.ID, t.Name, t.Status)
+	for i := range tasks {
+		fmt.Printf("  - %s: %s (Status: %s)\n", tasks[i].ID, tasks[i].Name, tasks[i].Status)
 	}
 
 	// Show results

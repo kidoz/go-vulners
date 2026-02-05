@@ -9,20 +9,20 @@ linters:
     - misspell
     - unconvert
     - gocritic
+  settings:
+    govet:
+      disable:
+        - shadow
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
   exclusions:
     generated: lax
-    test: lax
-
-settings:
-  govet:
-    disable:
-      - shadow
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - style
-      - performance
-
-issues:
-  max-issues-per-linter: 0
-  max-same-issues: 0
+    presets:
+      - std-error-handling
+    rules:
+      - path: _test\.go
+        linters:
+          - gocritic

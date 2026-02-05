@@ -39,8 +39,8 @@ func main() {
 	}
 
 	fmt.Printf("Found %d results:\n", results.Total)
-	for _, b := range results.Bulletins {
-		fmt.Printf("  - [%s] %s (CVSS: %.1f)\n", b.ID, b.Title, getCVSSScore(b))
+	for i := range results.Bulletins {
+		fmt.Printf("  - [%s] %s (CVSS: %.1f)\n", results.Bulletins[i].ID, results.Bulletins[i].Title, getCVSSScore(&results.Bulletins[i]))
 	}
 
 	// Example 2: Get a specific bulletin by ID
@@ -67,8 +67,8 @@ func main() {
 	}
 
 	fmt.Printf("Found %d exploits:\n", exploits.Total)
-	for _, e := range exploits.Bulletins {
-		fmt.Printf("  - [%s] %s\n", e.ID, e.Title)
+	for i := range exploits.Bulletins {
+		fmt.Printf("  - [%s] %s\n", exploits.Bulletins[i].ID, exploits.Bulletins[i].Title)
 	}
 
 	// Example 4: Get multiple bulletins at once
@@ -80,14 +80,14 @@ func main() {
 	}
 
 	fmt.Printf("Retrieved %d bulletins:\n", len(bulletins))
-	for id, b := range bulletins {
-		fmt.Printf("  - %s: %s\n", id, b.Title)
+	for id := range bulletins {
+		fmt.Printf("  - %s: %s\n", id, bulletins[id].Title)
 	}
 
 	fmt.Println("\nDone!")
 }
 
-func getCVSSScore(b vulners.Bulletin) float64 {
+func getCVSSScore(b *vulners.Bulletin) float64 {
 	if b.CVSS3 != nil {
 		return b.CVSS3.Score
 	}

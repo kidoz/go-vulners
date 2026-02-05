@@ -195,7 +195,8 @@ func (s *AuditService) convertResponse(resp *auditResponse) *AuditResult {
 	if len(resp.Packages) > 0 {
 		for pkg, bulletins := range resp.Packages {
 			for bulletinID, vulns := range bulletins {
-				for _, v := range vulns {
+				for i := range vulns {
+					v := &vulns[i]
 					result.Vulnerabilities = append(result.Vulnerabilities, Vulnerability{
 						Package:    pkg,
 						BulletinID: bulletinID,

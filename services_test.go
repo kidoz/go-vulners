@@ -1,9 +1,13 @@
 package vulners
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -675,6 +679,110 @@ func TestSearchService_GetBulletinHistoryEmptyID(t *testing.T) {
 	_, err := client.Search().GetBulletinHistory(context.Background(), "")
 	if err == nil {
 		t.Error("expected error for empty id")
+	}
+
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Errorf("expected ErrInvalidInput, got %v", err)
+	}
+}
+
+func TestAuditService_SBOMAudit(t *testing.T) {
+	sbomContent := `{"bomFormat":"CycloneDX","specVersion":"1.4"}`
+
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		// Validate request method
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+
+		// Validate content type is multipart
+		ct := r.Header.Get("Content-Type")
+		mediaType, params, err := mime.ParseMediaType(ct)
+		if err != nil {
+			t.Fatalf("failed to parse Content-Type: %v", err)
+		}
+		if mediaType != "multipart/form-data" {
+			t.Errorf("expected multipart/form-data, got %s", mediaType)
+		}
+
+		// Read the multipart form and validate the file field
+		mr := multipart.NewReader(r.Body, params["boundary"])
+		part, err := mr.NextPart()
+		if err != nil {
+			t.Fatalf("failed to read multipart part: %v", err)
+		}
+		if part.FormName() != "file" {
+			t.Errorf("expected form field 'file', got '%s'", part.FormName())
+		}
+		if part.FileName() != "sbom" {
+			t.Errorf("expected filename 'sbom', got '%s'", part.FileName())
+		}
+		body, err := io.ReadAll(part)
+		if err != nil {
+			t.Fatalf("failed to read part body: %v", err)
+		}
+		if string(body) != sbomContent {
+			t.Errorf("expected body %q, got %q", sbomContent, string(body))
+		}
+
+		// Return SBOM audit response (v4 format: {"result": [...]})
+		fixed := "1.5.0"
+		resp := SBOMAuditResult{
+			Packages: []SBOMPackageResult{
+				{
+					Package:      "log4j-core",
+					Version:      "2.14.1",
+					FixedVersion: &fixed,
+					ApplicableAdvisories: []SBOMAdvisory{
+						{
+							ID:          "CVE-2021-44228",
+							Type:        "cve",
+							Match:       "range",
+							Title:       "Log4Shell",
+							Description: "Remote code execution in Apache Log4j",
+						},
+					},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	result, err := client.Audit().SBOMAudit(context.Background(), bytes.NewBufferString(sbomContent))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(result.Packages) != 1 {
+		t.Fatalf("expected 1 package, got %d", len(result.Packages))
+	}
+	pkg := result.Packages[0]
+	if pkg.Package != "log4j-core" {
+		t.Errorf("expected Package=log4j-core, got %s", pkg.Package)
+	}
+	if pkg.Version != "2.14.1" {
+		t.Errorf("expected Version=2.14.1, got %s", pkg.Version)
+	}
+	if pkg.FixedVersion == nil || *pkg.FixedVersion != "1.5.0" {
+		t.Errorf("expected FixedVersion=1.5.0, got %v", pkg.FixedVersion)
+	}
+	if len(pkg.ApplicableAdvisories) != 1 {
+		t.Fatalf("expected 1 advisory, got %d", len(pkg.ApplicableAdvisories))
+	}
+	if pkg.ApplicableAdvisories[0].ID != "CVE-2021-44228" {
+		t.Errorf("expected advisory ID=CVE-2021-44228, got %s", pkg.ApplicableAdvisories[0].ID)
+	}
+}
+
+func TestAuditService_SBOMAuditNilReader(t *testing.T) {
+	client := newTestClient(t, jsonHandler(t, nil))
+
+	_, err := client.Audit().SBOMAudit(context.Background(), nil)
+	if err == nil {
+		t.Error("expected error for nil reader")
 	}
 
 	if !errors.Is(err, ErrInvalidInput) {

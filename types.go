@@ -189,6 +189,38 @@ type LinuxAuditRequest struct {
 	Packages []string `json:"package"`
 }
 
+// SBOMAuditResult represents the response from the SBOM audit endpoint.
+type SBOMAuditResult struct {
+	Packages []SBOMPackageResult `json:"result"`
+}
+
+// SBOMPackageResult represents audit findings for a single package in an SBOM.
+type SBOMPackageResult struct {
+	Package              string         `json:"package"`
+	Version              string         `json:"version"`
+	FixedVersion         *string        `json:"fixed_version"`
+	ApplicableAdvisories []SBOMAdvisory `json:"applicable_advisories"`
+}
+
+// SBOMAdvisory represents a security advisory applicable to an SBOM package.
+type SBOMAdvisory struct {
+	ID               string          `json:"id"`
+	Type             string          `json:"type"`
+	Match            string          `json:"match"`
+	Title            string          `json:"title"`
+	Description      string          `json:"description"`
+	AIDescription    string          `json:"ai_description,omitempty"`
+	Published        *Time           `json:"published"`
+	EPSS             json.RawMessage `json:"epss,omitempty"`
+	AIScore          json.RawMessage `json:"ai_score,omitempty"`
+	Metrics          json.RawMessage `json:"metrics,omitempty"`
+	Exploitation     json.RawMessage `json:"exploitation,omitempty"`
+	Enchantments     json.RawMessage `json:"enchantments,omitempty"`
+	WebApplicability json.RawMessage `json:"web_applicability,omitempty"`
+	References       []string        `json:"references,omitempty"`
+	Exploits         json.RawMessage `json:"exploits,omitempty"`
+}
+
 // CPEResult represents a CPE search result.
 type CPEResult struct {
 	CPE     string `json:"cpe,omitempty"`

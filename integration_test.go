@@ -132,6 +132,35 @@ func TestIntegration_LinuxAudit(t *testing.T) {
 	}
 }
 
+func TestIntegration_SBOMAudit(t *testing.T) {
+	client := getTestClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	f, err := os.Open("testdata/spdx.json")
+	if err != nil {
+		t.Fatalf("failed to open testdata/spdx.json: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	result, err := client.Audit().SBOMAudit(ctx, f)
+	if err != nil {
+		t.Fatalf("SBOMAudit failed: %v", err)
+	}
+
+	t.Logf("SBOM audit: %d packages analyzed", len(result.Packages))
+	for _, pkg := range result.Packages {
+		fix := "<none>"
+		if pkg.FixedVersion != nil {
+			fix = *pkg.FixedVersion
+		}
+		t.Logf("  - %s@%s (fix: %s, advisories: %d)", pkg.Package, pkg.Version, fix, len(pkg.ApplicableAdvisories))
+		for _, adv := range pkg.ApplicableAdvisories {
+			t.Logf("      %s: %s (match: %s)", adv.ID, adv.Title, adv.Match)
+		}
+	}
+}
+
 func TestIntegration_SearchCPE(t *testing.T) {
 	client := getTestClient(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

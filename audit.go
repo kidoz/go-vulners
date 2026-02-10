@@ -2,6 +2,8 @@ package vulners
 
 import (
 	"context"
+	"fmt"
+	"io"
 )
 
 // AuditService provides methods for vulnerability auditing.
@@ -175,6 +177,22 @@ func (s *AuditService) WinAudit(ctx context.Context, os, osVersion string, kbLis
 	}
 
 	return s.convertResponse(&resp), nil
+}
+
+// SBOMAudit performs an SBOM-based audit by uploading an SBOM file.
+// The reader r should provide the SBOM content in SPDX or CycloneDX JSON format
+// (e.g., an os.File or bytes.Buffer).
+func (s *AuditService) SBOMAudit(ctx context.Context, r io.Reader, opts ...AuditOption) (*SBOMAuditResult, error) {
+	if r == nil {
+		return nil, fmt.Errorf("%w: SBOM reader is required", ErrInvalidInput)
+	}
+
+	var resp SBOMAuditResult
+	if err := s.transport.doPostMultipart(ctx, "/api/v4/audit/sbom", "file", "sbom", r, &resp); err != nil {
+		return nil, err
+	}
+
+	return &resp, nil
 }
 
 // convertResponse converts the internal audit response to the public AuditResult.

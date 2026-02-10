@@ -12,6 +12,7 @@ import (
 	"io"
 	"math"
 	"math/rand"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -384,6 +385,125 @@ func (t *transport) doGet(ctx context.Context, path string, params map[string]st
 // doPost performs a POST request with a JSON body.
 func (t *transport) doPost(ctx context.Context, path string, body, result any) error {
 	return t.do(ctx, http.MethodPost, path, body, result)
+}
+
+// doPostMultipart performs a POST request with a multipart/form-data body containing a single file field.
+func (t *transport) doPostMultipart(ctx context.Context, path, fieldName, fileName string, r io.Reader, result any) error {
+	// Buffer the entire multipart body so retries can re-read it.
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	part, err := mw.CreateFormFile(fieldName, fileName)
+	if err != nil {
+		return fmt.Errorf("failed to create multipart field: %w", err)
+	}
+	if _, err := io.Copy(part, r); err != nil {
+		return fmt.Errorf("failed to write multipart data: %w", err)
+	}
+	if err := mw.Close(); err != nil {
+		return fmt.Errorf("failed to close multipart writer: %w", err)
+	}
+	bodyBytes := buf.Bytes()
+	contentType := mw.FormDataContentType()
+
+	var attempt int
+	for {
+		if t.rateLimiter != nil {
+			if err := t.rateLimiter.WaitContext(ctx); err != nil {
+				return err
+			}
+		}
+
+		err := t.doOnceRaw(ctx, path, bodyBytes, contentType, result)
+		if err == nil {
+			return nil
+		}
+
+		if !t.shouldRetry(err, attempt) {
+			return err
+		}
+
+		attempt++
+
+		delay := t.backoffDelay(attempt)
+		var retryErr *retryableError
+		if errors.As(err, &retryErr) && retryErr.retryAfter > 0 {
+			delay = retryErr.retryAfter
+			if delay > maxRetryDelay {
+				delay = maxRetryDelay
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+}
+
+// doOnceRaw performs a single POST request with a pre-built body and content type.
+func (t *transport) doOnceRaw(ctx context.Context, path string, body []byte, contentType string, result any) error {
+	reqURL := t.baseURL + path
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	if t.apiKey != "" {
+		req.Header.Set("X-Api-Key", t.apiKey)
+	}
+	req.Header.Set("User-Agent", t.userAgent)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept-Encoding", "gzip")
+	req.Header.Set("Content-Type", contentType)
+
+	resp, err := t.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	t.updateRateLimitFromHeaders(resp.Header)
+
+	return t.handleResponseDirect(resp, result)
+}
+
+// handleResponseDirect processes the HTTP response by unmarshaling the body
+// directly into result, without the apiResponse wrapper. Used for v4 endpoints
+// that return {"result": T} instead of {"result": "OK", "data": T}.
+func (t *transport) handleResponseDirect(resp *http.Response, result any) error {
+	var reader io.Reader = resp.Body
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		gzReader, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return fmt.Errorf("failed to create gzip reader: %w", err)
+		}
+		defer func() { _ = gzReader.Close() }()
+		reader = gzReader
+	}
+
+	limitedReader := &io.LimitedReader{R: reader, N: maxResponseSize + 1}
+	bodyBytes, err := io.ReadAll(limitedReader)
+	if err != nil {
+		return fmt.Errorf("failed to read response body: %w", err)
+	}
+	if limitedReader.N == 0 {
+		return fmt.Errorf("vulners: response body exceeds maximum size of %d bytes", maxResponseSize)
+	}
+
+	if resp.StatusCode >= 400 {
+		return t.handleErrorResponse(resp.StatusCode, bodyBytes, resp.Header)
+	}
+
+	if len(bodyBytes) == 0 || result == nil {
+		return nil
+	}
+
+	if err := json.Unmarshal(bodyBytes, result); err != nil {
+		return fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+	return nil
 }
 
 // doPut performs a PUT request with a JSON body.

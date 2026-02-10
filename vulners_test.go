@@ -3,10 +3,15 @@ package vulners
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewClient(t *testing.T) {
@@ -273,3 +278,175 @@ func TestTime_UnmarshalJSON(t *testing.T) {
 		})
 	}
 }
+
+func TestParseRetryAfter(t *testing.T) {
+	loc, err := time.LoadLocation("GMT")
+	require.NoError(t, err)
+
+	tests := []struct {
+		name     string
+		value    string
+		expected time.Duration
+	}{
+		{
+			name:     "empty value",
+			value:    "",
+			expected: 0,
+		},
+		{
+			name:     "delta-seconds",
+			value:    "120",
+			expected: 2 * time.Minute,
+		},
+		{
+			name:     "invalid delta-seconds",
+			value:    "abc",
+			expected: 0,
+		},
+		{
+			name:     "negative delta-seconds",
+			value:    "-10",
+			expected: 0,
+		},
+		{
+			name:     "http-date in the future",
+			value:    time.Now().In(loc).Add(5 * time.Minute).Format(time.RFC1123),
+			expected: 5 * time.Minute,
+		},
+		{
+			name:     "http-date in the past",
+			value:    time.Now().In(loc).Add(-5 * time.Minute).Format(time.RFC1123),
+			expected: 0,
+		},
+		{
+			name:     "invalid http-date",
+			value:    "not a date",
+			expected: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := parseRetryAfter(tt.value)
+			// Allow for a small delta due to timing issues with http-date
+			if tt.name == "http-date in the future" {
+				assert.InDelta(t, tt.expected, d, float64(time.Second))
+			} else {
+				assert.Equal(t, tt.expected, d)
+			}
+		})
+	}
+}
+
+func TestShouldRetry(t *testing.T) {
+	transport := &transport{maxRetries: defaultMaxRetries}
+
+	tests := []struct {
+		name     string
+		err      error
+		attempt  int
+		expected bool
+	}{
+		{
+			name:     "no error",
+			err:      nil,
+			attempt:  0,
+			expected: false,
+		},
+		{
+			name:     "max retries reached",
+			err:      NewAPIError(500, "server error", ""),
+			attempt:  defaultMaxRetries,
+			expected: false,
+		},
+		{
+			name:     "context canceled",
+			err:      context.Canceled,
+			attempt:  0,
+			expected: false,
+		},
+		{
+			name:     "context deadline exceeded",
+			err:      context.DeadlineExceeded,
+			attempt:  0,
+			expected: false,
+		},
+		{
+			name:     "rate limit error",
+			err:      NewAPIError(429, "rate limit", ""),
+			attempt:  1,
+			expected: true,
+		},
+		{
+			name:     "server error",
+			err:      NewAPIError(500, "internal server error", ""),
+			attempt:  1,
+			expected: true,
+		},
+		{
+			name:     "client error (not retryable)",
+			err:      NewAPIError(400, "bad request", ""),
+			attempt:  1,
+			expected: false,
+		},
+		{
+			name:     "temporary network error",
+			err:      &url.Error{Err: tempErr(true)},
+			attempt:  1,
+			expected: true,
+		},
+		{
+			name:     "non-temporary network error",
+			err:      &url.Error{Err: tempErr(false)},
+			attempt:  1,
+			expected: false,
+		},
+		{
+			name:     "timeout error",
+			err:      &url.Error{Err: timeoutErr(true)},
+			attempt:  1,
+			expected: true,
+		},
+		{
+			name:     "other error",
+			err:      fmt.Errorf("some other error"),
+			attempt:  1,
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actual := transport.shouldRetry(tt.err, tt.attempt)
+			assert.Equal(t, tt.expected, actual)
+		})
+	}
+}
+
+func TestBackoffDelay(t *testing.T) {
+	transport := &transport{rng: newLockedRand()}
+	minDelay := time.Duration(float64(baseRetryDelay) * 1.0)
+	maxDelay := time.Duration(float64(baseRetryDelay) * 1.25)
+
+	delay := transport.backoffDelay(1)
+	assert.True(t, delay >= minDelay && delay <= maxDelay, "delay for attempt 1 is out of range")
+
+	minDelay = time.Duration(float64(baseRetryDelay) * 2.0)
+	maxDelay = time.Duration(float64(baseRetryDelay) * 2.0 * 1.25)
+
+	delay = transport.backoffDelay(2)
+	assert.True(t, delay >= minDelay && delay <= maxDelay, "delay for attempt 2 is out of range")
+}
+
+// tempErr is a helper to create an error that implements the Temporary() bool interface.
+type tempErr bool
+
+func (e tempErr) Error() string   { return "temporary error" }
+func (e tempErr) Temporary() bool { return bool(e) }
+
+// timeoutErr is a helper to create an error that implements the Timeout() bool interface.
+type timeoutErr bool
+
+func (e timeoutErr) Error() string   { return "timeout error" }
+func (e timeoutErr) Timeout() bool   { return bool(e) }
+func (e timeoutErr) Temporary() bool { return bool(e) }

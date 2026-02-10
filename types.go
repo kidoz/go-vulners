@@ -202,6 +202,17 @@ type SBOMPackageResult struct {
 	ApplicableAdvisories []SBOMAdvisory `json:"applicableAdvisories"`
 }
 
+// SBOMMetrics contains CVSS scoring information for an SBOM advisory.
+type SBOMMetrics struct {
+	CVSS *CVSS `json:"cvss,omitempty"`
+}
+
+// Exploitation describes whether a vulnerability is exploited in the wild.
+type Exploitation struct {
+	WildExploited        bool     `json:"wildExploited"`
+	WildExploitedSources []string `json:"wildExploitedSources,omitempty"`
+}
+
 // SBOMAdvisory represents a security advisory applicable to an SBOM package.
 type SBOMAdvisory struct {
 	ID               string          `json:"id"`
@@ -211,10 +222,10 @@ type SBOMAdvisory struct {
 	Description      string          `json:"description"`
 	AIDescription    string          `json:"aiDescription,omitempty"`
 	Published        *Time           `json:"published"`
-	EPSS             json.RawMessage `json:"epss,omitempty"`
-	AIScore          json.RawMessage `json:"aiScore,omitempty"`
-	Metrics          json.RawMessage `json:"metrics,omitempty"`
-	Exploitation     json.RawMessage `json:"exploitation,omitempty"`
+	EPSS             []Epss          `json:"epss,omitempty"`
+	AIScore          *AIScore        `json:"aiScore,omitempty"`
+	Metrics          *SBOMMetrics    `json:"metrics,omitempty"`
+	Exploitation     *Exploitation   `json:"exploitation,omitempty"`
 	Enchantments     json.RawMessage `json:"enchantments,omitempty"`
 	WebApplicability json.RawMessage `json:"webApplicability,omitempty"`
 	References       []string        `json:"references,omitempty"`

@@ -740,6 +740,20 @@ func TestAuditService_SBOMAudit(t *testing.T) {
 							Match:       "range",
 							Title:       "Log4Shell",
 							Description: "Remote code execution in Apache Log4j",
+							EPSS: []Epss{
+								{Cve: "CVE-2021-44228", Epss: 0.975, Percentile: 0.999},
+							},
+							AIScore: &AIScore{
+								Score:    9.8,
+								Severity: "critical",
+							},
+							Metrics: &SBOMMetrics{
+								CVSS: &CVSS{Score: 10.0, Vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H"},
+							},
+							Exploitation: &Exploitation{
+								WildExploited:        true,
+								WildExploitedSources: []string{"CISA KEV"},
+							},
 						},
 					},
 				},
@@ -772,8 +786,28 @@ func TestAuditService_SBOMAudit(t *testing.T) {
 	if len(pkg.ApplicableAdvisories) != 1 {
 		t.Fatalf("expected 1 advisory, got %d", len(pkg.ApplicableAdvisories))
 	}
-	if pkg.ApplicableAdvisories[0].ID != "CVE-2021-44228" {
-		t.Errorf("expected advisory ID=CVE-2021-44228, got %s", pkg.ApplicableAdvisories[0].ID)
+	adv := pkg.ApplicableAdvisories[0]
+	if adv.ID != "CVE-2021-44228" {
+		t.Errorf("expected advisory ID=CVE-2021-44228, got %s", adv.ID)
+	}
+	// EPSS
+	if len(adv.EPSS) != 1 || adv.EPSS[0].Epss != 0.975 {
+		t.Errorf("expected EPSS[0].Epss=0.975, got %v", adv.EPSS)
+	}
+	// AIScore
+	if adv.AIScore == nil || adv.AIScore.Score != 9.8 {
+		t.Errorf("expected AIScore.Score=9.8, got %v", adv.AIScore)
+	}
+	// Metrics
+	if adv.Metrics == nil || adv.Metrics.CVSS == nil || adv.Metrics.CVSS.Score != 10.0 {
+		t.Errorf("expected Metrics.CVSS.Score=10.0, got %v", adv.Metrics)
+	}
+	// Exploitation
+	if adv.Exploitation == nil || !adv.Exploitation.WildExploited {
+		t.Errorf("expected Exploitation.WildExploited=true, got %v", adv.Exploitation)
+	}
+	if adv.Exploitation != nil && (len(adv.Exploitation.WildExploitedSources) != 1 || adv.Exploitation.WildExploitedSources[0] != "CISA KEV") {
+		t.Errorf("expected WildExploitedSources=[CISA KEV], got %v", adv.Exploitation.WildExploitedSources)
 	}
 }
 

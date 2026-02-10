@@ -11,7 +11,7 @@ A Go client library for the [Vulners](https://vulners.com) vulnerability databas
 
 - Full coverage of Vulners API v3/v4
 - Search for vulnerabilities, exploits, and security bulletins
-- Audit Linux packages, Windows KBs, and software CPEs
+- Audit Linux packages, Windows KBs, software CPEs, and SBOM files
 - VScanner integration for vulnerability scanning
 - Built-in rate limiting with dynamic adjustment
 - Automatic retry with exponential backoff
@@ -133,6 +133,15 @@ software := []vulners.AuditItem{
     {Software: "apache", Version: "2.4.49", Type: "software"},
 }
 result, err := client.Audit().Software(ctx, software)
+
+// Audit an SBOM file (SPDX or CycloneDX JSON)
+f, err := os.Open("sbom.spdx.json")
+if err != nil {
+    log.Fatal(err)
+}
+defer f.Close()
+sbomResult, err := client.Audit().SBOMAudit(ctx, f)
+fmt.Printf("Analyzed %d packages\n", len(sbomResult.Packages))
 ```
 
 ### Archive Service

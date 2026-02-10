@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"github.com/kidoz/go-vulners"
@@ -141,6 +142,31 @@ func ExampleAuditService_KBAudit() {
 	}
 
 	fmt.Printf("Found %d vulnerabilities\n", len(result.Vulnerabilities))
+}
+
+func ExampleAuditService_SBOMAudit() {
+	client, err := vulners.NewClient("your-api-key")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	ctx := context.Background()
+
+	// Open an SBOM file (SPDX or CycloneDX JSON format)
+	f, err := os.Open("sbom.spdx.json")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+
+	result, err := client.Audit().SBOMAudit(ctx, f)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	for _, pkg := range result.Packages {
+		fmt.Printf("%s@%s: %d advisories\n", pkg.Package, pkg.Version, len(pkg.ApplicableAdvisories))
+	}
 }
 
 func ExampleArchiveService_FetchCollection() {

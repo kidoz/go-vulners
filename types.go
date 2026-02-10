@@ -207,10 +207,16 @@ type SBOMMetrics struct {
 	CVSS *CVSS `json:"cvss,omitempty"`
 }
 
+// ExploitationSource identifies a source that reported wild exploitation.
+type ExploitationSource struct {
+	Type   string   `json:"type,omitempty"`
+	IDList []string `json:"idList,omitempty"`
+}
+
 // Exploitation describes whether a vulnerability is exploited in the wild.
 type Exploitation struct {
-	WildExploited        bool     `json:"wildExploited"`
-	WildExploitedSources []string `json:"wildExploitedSources,omitempty"`
+	WildExploited        bool                 `json:"wildExploited"`
+	WildExploitedSources []ExploitationSource `json:"wildExploitedSources,omitempty"`
 }
 
 // SBOMAdvisory represents a security advisory applicable to an SBOM package.

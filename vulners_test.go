@@ -330,7 +330,7 @@ func TestParseRetryAfter(t *testing.T) {
 			d := parseRetryAfter(tt.value)
 			// Allow for a small delta due to timing issues with http-date
 			if tt.name == "http-date in the future" {
-				assert.InDelta(t, tt.expected, d, float64(time.Second))
+				assert.InDelta(t, tt.expected, d, float64(2*time.Second))
 			} else {
 				assert.Equal(t, tt.expected, d)
 			}

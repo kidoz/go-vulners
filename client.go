@@ -24,7 +24,7 @@ import (
 const (
 	defaultBaseURL   = "https://vulners.com"
 	defaultTimeout   = 30 * time.Second
-	defaultUserAgent = "go-vulners/1.1.1"
+	defaultUserAgent = "go-vulners/1.1.2"
 
 	// Default rate limit values (conservative defaults)
 	defaultRateLimit = 5.0 // requests per second

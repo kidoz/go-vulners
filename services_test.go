@@ -751,8 +751,10 @@ func TestAuditService_SBOMAudit(t *testing.T) {
 								CVSS: &CVSS{Score: 10.0, Vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H"},
 							},
 							Exploitation: &Exploitation{
-								WildExploited:        true,
-								WildExploitedSources: []string{"CISA KEV"},
+								WildExploited: true,
+								WildExploitedSources: []ExploitationSource{
+									{Type: "CISA KEV", IDList: []string{"CVE-2021-44228"}},
+								},
 							},
 						},
 					},
@@ -806,8 +808,8 @@ func TestAuditService_SBOMAudit(t *testing.T) {
 	if adv.Exploitation == nil || !adv.Exploitation.WildExploited {
 		t.Errorf("expected Exploitation.WildExploited=true, got %v", adv.Exploitation)
 	}
-	if adv.Exploitation != nil && (len(adv.Exploitation.WildExploitedSources) != 1 || adv.Exploitation.WildExploitedSources[0] != "CISA KEV") {
-		t.Errorf("expected WildExploitedSources=[CISA KEV], got %v", adv.Exploitation.WildExploitedSources)
+	if adv.Exploitation != nil && (len(adv.Exploitation.WildExploitedSources) != 1 || adv.Exploitation.WildExploitedSources[0].Type != "CISA KEV") {
+		t.Errorf("expected WildExploitedSources[0].Type=CISA KEV, got %v", adv.Exploitation.WildExploitedSources)
 	}
 }
 

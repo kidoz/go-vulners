@@ -19,7 +19,7 @@ type Bulletin struct {
 	Modified         *Time              `json:"modified,omitempty"`
 	CVSS             *CVSS              `json:"cvss,omitempty"`
 	CVSS2            *CVSS              `json:"cvss2,omitempty"`
-	CVSS3            *CVSS              `json:"cvss3,omitempty"`
+	CVSS3            *CVSS3             `json:"cvss3,omitempty"`
 	CVEList          []string           `json:"cvelist,omitempty"`
 	Href             string             `json:"href,omitempty"`
 	SourceHref       string             `json:"sourceHref,omitempty"`
@@ -31,11 +31,18 @@ type Bulletin struct {
 	AffectedSoftware []AffectedSoftware `json:"affectedSoftware,omitempty"`
 
 	// Additional fields that may be present
+	Assigned      *Time          `json:"assigned,omitempty"`
 	VulnStatus    string         `json:"vulnStatus,omitempty"`
 	AI            *AIScore       `json:"ai,omitempty"`
+	CVSS4         *CVSS          `json:"cvss4,omitempty"`
 	History       []HistoryEntry `json:"history,omitempty"`
 	ObjectVersion string         `json:"objectVersion,omitempty"`
 	LastSeenAt    *Time          `json:"lastseen,omitempty"`
+
+	// Search-result metadata (present only in search responses)
+	VHref           string `json:"vhref,omitempty"`
+	ViewCount       int    `json:"viewCount,omitempty"`
+	SourceAvailable bool   `json:"sourceAvailable,omitempty"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler for Bulletin.
@@ -51,9 +58,7 @@ func (b *Bulletin) UnmarshalJSON(data []byte) error {
 		AltTitle          string `json:"_title,omitempty"`
 		AltBulletinFamily string `json:"_bulletinFamily,omitempty"`
 		// Nested source object (Elasticsearch-style responses)
-		Source *bulletinAlias `json:"_source,omitempty"`
-		// Flat source fields (alternative naming)
-		FlatSource json.RawMessage `json:"flatDescription,omitempty"`
+		Source json.RawMessage `json:"_source,omitempty"`
 	}{
 		bulletinAlias: (*bulletinAlias)(b),
 	}
@@ -62,9 +67,13 @@ func (b *Bulletin) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	// If there's a _source object, use its fields
-	if aux.Source != nil {
-		*b = Bulletin(*aux.Source)
+	// If there's a _source object, merge its fields into b.
+	// Using json.Unmarshal (not replace) preserves any top-level fields
+	// that are absent from _source.
+	if len(aux.Source) > 0 {
+		if err := json.Unmarshal(aux.Source, (*bulletinAlias)(b)); err != nil {
+			return err
+		}
 	}
 
 	// Use underscore-prefixed fields as fallbacks
@@ -90,6 +99,7 @@ type CVSS struct {
 	Vector   string  `json:"vector,omitempty"`
 	Version  string  `json:"version,omitempty"`
 	Severity string  `json:"severity,omitempty"`
+	Source   string  `json:"source,omitempty"`
 
 	// CVSS v3 specific fields
 	AttackVector          string `json:"attackVector,omitempty"`
@@ -102,11 +112,65 @@ type CVSS struct {
 	AvailabilityImpact    string `json:"availabilityImpact,omitempty"`
 }
 
+// CVSS3 wraps CVSS to handle NVD-style nested CVSS v3 responses.
+//
+// The API returns cvss3 as {"cvssV3": {"baseScore":9.8, "baseSeverity":"CRITICAL", "vectorString":"CVSS:3.1/...", ...}}.
+// This type transparently flattens that into the embedded CVSS fields.
+type CVSS3 struct {
+	CVSS
+}
+
+// UnmarshalJSON implements json.Unmarshaler for CVSS3.
+// It handles both the NVD wrapper format {"cvssV3": {...}} and flat CVSS format.
+func (c *CVSS3) UnmarshalJSON(data []byte) error {
+	// Try NVD wrapper format first: {"cvssV3": {"baseScore": ..., "baseSeverity": ..., "vectorString": ...}}
+	var wrapper struct {
+		CvssV3 *nvdCVSS3 `json:"cvssV3"`
+	}
+	if err := json.Unmarshal(data, &wrapper); err == nil && wrapper.CvssV3 != nil {
+		c.Score = wrapper.CvssV3.BaseScore
+		c.Severity = wrapper.CvssV3.BaseSeverity
+		c.Vector = wrapper.CvssV3.VectorString
+		c.Version = wrapper.CvssV3.Version
+		c.AttackVector = wrapper.CvssV3.AttackVector
+		c.AttackComplexity = wrapper.CvssV3.AttackComplexity
+		c.PrivilegesRequired = wrapper.CvssV3.PrivilegesRequired
+		c.UserInteraction = wrapper.CvssV3.UserInteraction
+		c.Scope = wrapper.CvssV3.Scope
+		c.ConfidentialityImpact = wrapper.CvssV3.ConfidentialityImpact
+		c.IntegrityImpact = wrapper.CvssV3.IntegrityImpact
+		c.AvailabilityImpact = wrapper.CvssV3.AvailabilityImpact
+		c.Source = wrapper.CvssV3.Source
+		return nil
+	}
+
+	// Fall back to flat CVSS format
+	return json.Unmarshal(data, &c.CVSS)
+}
+
+// nvdCVSS3 represents the NVD CVSS v3 field naming convention.
+type nvdCVSS3 struct {
+	Version               string  `json:"version,omitempty"`
+	BaseScore             float64 `json:"baseScore,omitempty"`
+	BaseSeverity          string  `json:"baseSeverity,omitempty"`
+	VectorString          string  `json:"vectorString,omitempty"`
+	AttackVector          string  `json:"attackVector,omitempty"`
+	AttackComplexity      string  `json:"attackComplexity,omitempty"`
+	PrivilegesRequired    string  `json:"privilegesRequired,omitempty"`
+	UserInteraction       string  `json:"userInteraction,omitempty"`
+	Scope                 string  `json:"scope,omitempty"`
+	ConfidentialityImpact string  `json:"confidentialityImpact,omitempty"`
+	IntegrityImpact       string  `json:"integrityImpact,omitempty"`
+	AvailabilityImpact    string  `json:"availabilityImpact,omitempty"`
+	Source                string  `json:"source,omitempty"`
+}
+
 // Epss represents EPSS (Exploit Prediction Scoring System) data.
 type Epss struct {
 	Cve        string  `json:"cve,omitempty"`
 	Epss       float64 `json:"epss,omitempty"`
 	Percentile float64 `json:"percentile,omitempty"`
+	Date       string  `json:"date,omitempty"`
 }
 
 // AffectedSoftware represents software affected by a vulnerability.
@@ -119,10 +183,11 @@ type AffectedSoftware struct {
 }
 
 // AIScore represents AI-generated vulnerability scoring.
+//
+// Fields match the SBOM audit endpoint response format: {"value": 10.0, "uncertainty": 0.1}.
 type AIScore struct {
-	Score       float64 `json:"score,omitempty"`
-	Severity    string  `json:"severity,omitempty"`
-	Explanation string  `json:"explanation,omitempty"`
+	Value       float64 `json:"value,omitempty"`
+	Uncertainty float64 `json:"uncertainty,omitempty"`
 }
 
 // HistoryEntry represents a change history entry.
@@ -204,7 +269,8 @@ type SBOMPackageResult struct {
 
 // SBOMMetrics contains CVSS scoring information for an SBOM advisory.
 type SBOMMetrics struct {
-	CVSS *CVSS `json:"cvss,omitempty"`
+	CVSS *CVSS    `json:"cvss,omitempty"`
+	EPSS []string `json:"epss,omitempty"`
 }
 
 // ExploitationSource identifies a source that reported wild exploitation.
@@ -228,6 +294,7 @@ type SBOMAdvisory struct {
 	Description      string          `json:"description"`
 	AIDescription    string          `json:"aiDescription,omitempty"`
 	Published        *Time           `json:"published"`
+	CVEList          []string        `json:"cvelist,omitempty"`
 	EPSS             []Epss          `json:"epss,omitempty"`
 	AIScore          *AIScore        `json:"aiScore,omitempty"`
 	Metrics          *SBOMMetrics    `json:"metrics,omitempty"`
@@ -236,6 +303,38 @@ type SBOMAdvisory struct {
 	WebApplicability json.RawMessage `json:"webApplicability,omitempty"`
 	References       []string        `json:"references,omitempty"`
 	Exploits         json.RawMessage `json:"exploits,omitempty"`
+}
+
+// EnchantmentsScore represents the AI score from the enchantments field.
+type EnchantmentsScore struct {
+	Value       float64 `json:"value,omitempty"`
+	Uncertainty float64 `json:"uncertanity,omitempty"` //nolint:misspell // API typo preserved
+	Vector      string  `json:"vector,omitempty"`
+}
+
+// GetEnchantmentsScore extracts the AI score from the Enchantments raw JSON.
+// Returns nil if enchantments is empty or does not contain a score.
+func (b *Bulletin) GetEnchantmentsScore() *EnchantmentsScore {
+	return parseEnchantmentsScore(b.Enchantments)
+}
+
+// GetEnchantmentsScore extracts the AI score from the Enchantments raw JSON.
+// Returns nil if enchantments is empty or does not contain a score.
+func (a *SBOMAdvisory) GetEnchantmentsScore() *EnchantmentsScore {
+	return parseEnchantmentsScore(a.Enchantments)
+}
+
+func parseEnchantmentsScore(raw json.RawMessage) *EnchantmentsScore {
+	if len(raw) == 0 {
+		return nil
+	}
+	var enc struct {
+		Score *EnchantmentsScore `json:"score"`
+	}
+	if err := json.Unmarshal(raw, &enc); err != nil {
+		return nil
+	}
+	return enc.Score
 }
 
 // CPEResult represents a CPE search result.
@@ -290,8 +389,9 @@ type Time struct {
 
 // UnmarshalJSON implements json.Unmarshaler for Time.
 func (t *Time) UnmarshalJSON(data []byte) error {
-	// Handle null
+	// Handle null — reset to zero value
 	if string(data) == "null" {
+		t.Time = time.Time{}
 		return nil
 	}
 

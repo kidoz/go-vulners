@@ -544,8 +544,8 @@ func TestMiscService_SearchCPEEmptyVendor(t *testing.T) {
 func TestMiscService_GetAIScore(t *testing.T) {
 	data := map[string]interface{}{
 		"score": map[string]interface{}{
-			"score":    8.5,
-			"severity": "HIGH",
+			"value":       8.5,
+			"uncertainty": 0.2,
 		},
 	}
 
@@ -560,8 +560,8 @@ func TestMiscService_GetAIScore(t *testing.T) {
 		t.Fatal("expected non-nil score")
 	}
 
-	if score.Score != 8.5 {
-		t.Errorf("expected Score=8.5, got %f", score.Score)
+	if score.Value != 8.5 {
+		t.Errorf("expected Value=8.5, got %f", score.Value)
 	}
 }
 
@@ -744,8 +744,8 @@ func TestAuditService_SBOMAudit(t *testing.T) {
 								{Cve: "CVE-2021-44228", Epss: 0.975, Percentile: 0.999},
 							},
 							AIScore: &AIScore{
-								Score:    9.8,
-								Severity: "critical",
+								Value:       9.8,
+								Uncertainty: 0.1,
 							},
 							Metrics: &SBOMMetrics{
 								CVSS: &CVSS{Score: 10.0, Vector: "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H"},
@@ -797,8 +797,8 @@ func TestAuditService_SBOMAudit(t *testing.T) {
 		t.Errorf("expected EPSS[0].Epss=0.975, got %v", adv.EPSS)
 	}
 	// AIScore
-	if adv.AIScore == nil || adv.AIScore.Score != 9.8 {
-		t.Errorf("expected AIScore.Score=9.8, got %v", adv.AIScore)
+	if adv.AIScore == nil || adv.AIScore.Value != 9.8 {
+		t.Errorf("expected AIScore.Value=9.8, got %v", adv.AIScore)
 	}
 	// Metrics
 	if adv.Metrics == nil || adv.Metrics.CVSS == nil || adv.Metrics.CVSS.Score != 10.0 {

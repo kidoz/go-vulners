@@ -279,6 +279,240 @@ func TestTime_UnmarshalJSON(t *testing.T) {
 	}
 }
 
+func TestTime_UnmarshalJSON_NullResetsValue(t *testing.T) {
+	var tm Time
+	// First, set a non-zero time
+	err := json.Unmarshal([]byte(`"2021-12-09T12:00:00Z"`), &tm)
+	require.NoError(t, err)
+	assert.False(t, tm.IsZero(), "expected non-zero time after initial unmarshal")
+
+	// Now unmarshal null — should reset to zero
+	err = json.Unmarshal([]byte(`null`), &tm)
+	require.NoError(t, err)
+	assert.True(t, tm.IsZero(), "expected zero time after null unmarshal")
+}
+
+func TestBulletin_UnmarshalJSON_Source(t *testing.T) {
+	t.Run("_source merges without losing top-level fields", func(t *testing.T) {
+		// Simulate an Elasticsearch-style response where _source is partial
+		// and _id is at the top level
+		data := []byte(`{
+			"_id": "CVE-2021-44228",
+			"_type": "cve",
+			"_source": {
+				"title": "Log4Shell",
+				"description": "Apache Log4j2 vulnerability",
+				"cvss": {"score": 10.0}
+			}
+		}`)
+		var b Bulletin
+		err := json.Unmarshal(data, &b)
+		require.NoError(t, err)
+		assert.Equal(t, "CVE-2021-44228", b.ID, "_id should be used as fallback")
+		assert.Equal(t, "cve", b.Type, "_type should be used as fallback")
+		assert.Equal(t, "Log4Shell", b.Title, "title from _source")
+		assert.Equal(t, "Apache Log4j2 vulnerability", b.Description, "description from _source")
+		assert.NotNil(t, b.CVSS)
+		assert.Equal(t, 10.0, b.CVSS.Score, "cvss from _source")
+	})
+
+	t.Run("_source with id takes precedence over _id", func(t *testing.T) {
+		data := []byte(`{
+			"_id": "alt-id",
+			"_source": {
+				"id": "CVE-2021-44228",
+				"title": "Log4Shell"
+			}
+		}`)
+		var b Bulletin
+		err := json.Unmarshal(data, &b)
+		require.NoError(t, err)
+		assert.Equal(t, "CVE-2021-44228", b.ID, "_source id takes precedence")
+		assert.Equal(t, "Log4Shell", b.Title)
+	})
+
+	t.Run("no _source uses top-level fields directly", func(t *testing.T) {
+		data := []byte(`{
+			"id": "CVE-2021-44228",
+			"title": "Log4Shell",
+			"type": "cve"
+		}`)
+		var b Bulletin
+		err := json.Unmarshal(data, &b)
+		require.NoError(t, err)
+		assert.Equal(t, "CVE-2021-44228", b.ID)
+		assert.Equal(t, "Log4Shell", b.Title)
+		assert.Equal(t, "cve", b.Type)
+	})
+
+	t.Run("underscore fields used as fallback when empty", func(t *testing.T) {
+		data := []byte(`{
+			"_id": "CVE-2021-44228",
+			"_type": "cve",
+			"_title": "Log4Shell",
+			"_bulletinFamily": "NVD"
+		}`)
+		var b Bulletin
+		err := json.Unmarshal(data, &b)
+		require.NoError(t, err)
+		assert.Equal(t, "CVE-2021-44228", b.ID)
+		assert.Equal(t, "cve", b.Type)
+		assert.Equal(t, "Log4Shell", b.Title)
+		assert.Equal(t, "NVD", b.BulletinFamily)
+	})
+}
+
+func TestBulletin_GetEnchantmentsScore(t *testing.T) {
+	tests := []struct {
+		name         string
+		enchantments json.RawMessage
+		want         *EnchantmentsScore
+	}{
+		{
+			name:         "valid score",
+			enchantments: json.RawMessage(`{"score":{"value":9.7,"uncertanity":0.2,"vector":"NONE"}}`),
+			want:         &EnchantmentsScore{Value: 9.7, Uncertainty: 0.2, Vector: "NONE"},
+		},
+		{
+			name:         "nil enchantments",
+			enchantments: nil,
+			want:         nil,
+		},
+		{
+			name:         "empty enchantments",
+			enchantments: json.RawMessage(`{}`),
+			want:         nil,
+		},
+		{
+			name:         "no score key",
+			enchantments: json.RawMessage(`{"other":"data"}`),
+			want:         nil,
+		},
+		{
+			name:         "invalid JSON",
+			enchantments: json.RawMessage(`{invalid`),
+			want:         nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := &Bulletin{Enchantments: tt.enchantments}
+			got := b.GetEnchantmentsScore()
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestSBOMAdvisory_GetEnchantmentsScore(t *testing.T) {
+	tests := []struct {
+		name         string
+		enchantments json.RawMessage
+		want         *EnchantmentsScore
+	}{
+		{
+			name:         "valid score",
+			enchantments: json.RawMessage(`{"score":{"value":5.5,"uncertanity":0.1,"vector":"NETWORK"}}`),
+			want:         &EnchantmentsScore{Value: 5.5, Uncertainty: 0.1, Vector: "NETWORK"},
+		},
+		{
+			name:         "nil enchantments",
+			enchantments: nil,
+			want:         nil,
+		},
+		{
+			name:         "no score key",
+			enchantments: json.RawMessage(`{"something":"else"}`),
+			want:         nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := &SBOMAdvisory{Enchantments: tt.enchantments}
+			got := a.GetEnchantmentsScore()
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestCVSS3_UnmarshalJSON(t *testing.T) {
+	t.Run("NVD wrapper format", func(t *testing.T) {
+		data := []byte(`{
+			"cvssV3": {
+				"version": "3.1",
+				"baseScore": 9.8,
+				"baseSeverity": "CRITICAL",
+				"vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+				"attackVector": "NETWORK",
+				"attackComplexity": "LOW",
+				"privilegesRequired": "NONE",
+				"userInteraction": "NONE",
+				"scope": "UNCHANGED",
+				"confidentialityImpact": "HIGH",
+				"integrityImpact": "HIGH",
+				"availabilityImpact": "HIGH",
+				"source": "nvd"
+			}
+		}`)
+		var c CVSS3
+		err := json.Unmarshal(data, &c)
+		require.NoError(t, err)
+		assert.Equal(t, 9.8, c.Score)
+		assert.Equal(t, "CRITICAL", c.Severity)
+		assert.Equal(t, "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", c.Vector)
+		assert.Equal(t, "3.1", c.Version)
+		assert.Equal(t, "NETWORK", c.AttackVector)
+		assert.Equal(t, "LOW", c.AttackComplexity)
+		assert.Equal(t, "NONE", c.PrivilegesRequired)
+		assert.Equal(t, "NONE", c.UserInteraction)
+		assert.Equal(t, "UNCHANGED", c.Scope)
+		assert.Equal(t, "HIGH", c.ConfidentialityImpact)
+		assert.Equal(t, "HIGH", c.IntegrityImpact)
+		assert.Equal(t, "HIGH", c.AvailabilityImpact)
+		assert.Equal(t, "nvd", c.Source)
+	})
+
+	t.Run("flat CVSS format (backward compat)", func(t *testing.T) {
+		data := []byte(`{"score": 7.5, "vector": "CVSS:3.1/AV:N", "severity": "HIGH"}`)
+		var c CVSS3
+		err := json.Unmarshal(data, &c)
+		require.NoError(t, err)
+		assert.Equal(t, 7.5, c.Score)
+		assert.Equal(t, "CVSS:3.1/AV:N", c.Vector)
+		assert.Equal(t, "HIGH", c.Severity)
+	})
+
+	t.Run("empty cvssV3 falls back to flat", func(t *testing.T) {
+		data := []byte(`{"score": 5.0, "severity": "MEDIUM"}`)
+		var c CVSS3
+		err := json.Unmarshal(data, &c)
+		require.NoError(t, err)
+		assert.Equal(t, 5.0, c.Score)
+		assert.Equal(t, "MEDIUM", c.Severity)
+	})
+
+	t.Run("bulletin with CVSS3 wrapper", func(t *testing.T) {
+		data := []byte(`{
+			"id": "CVE-2021-44228",
+			"cvss3": {
+				"cvssV3": {
+					"baseScore": 10.0,
+					"baseSeverity": "CRITICAL",
+					"vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H"
+				}
+			}
+		}`)
+		var b Bulletin
+		err := json.Unmarshal(data, &b)
+		require.NoError(t, err)
+		require.NotNil(t, b.CVSS3)
+		assert.Equal(t, 10.0, b.CVSS3.Score)
+		assert.Equal(t, "CRITICAL", b.CVSS3.Severity)
+		assert.Equal(t, "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H", b.CVSS3.Vector)
+	})
+}
+
 func TestParseRetryAfter(t *testing.T) {
 	loc, err := time.LoadLocation("GMT")
 	require.NoError(t, err)

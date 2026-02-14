@@ -211,6 +211,7 @@ type AuditResult struct {
 	CVEList         []string        `json:"cvelist,omitempty"`
 	CVSSScore       float64         `json:"cvss,omitempty"`
 	CumulativeFix   string          `json:"cumulativeFix,omitempty"`
+	ID              string          `json:"id,omitempty"`
 }
 
 // Vulnerability represents a vulnerability found during audit.

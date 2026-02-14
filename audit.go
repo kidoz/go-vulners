@@ -15,7 +15,16 @@ type AuditService struct {
 type AuditOption func(*auditConfig)
 
 type auditConfig struct {
-	// Additional options can be added here
+	includeCandidates *bool
+}
+
+// WithIncludeCandidates controls whether advisories still awaiting vendor
+// evaluation are included in the results. The API default is true (include
+// everything). Pass false to drop "needs evaluation" items.
+func WithIncludeCandidates(v bool) AuditOption {
+	return func(c *auditConfig) {
+		c.includeCandidates = &v
+	}
 }
 
 // softwareAuditRequest represents a software audit request.
@@ -33,9 +42,10 @@ type hostAuditRequest struct {
 
 // linuxAuditRequest represents a Linux audit request.
 type linuxAuditRequest struct {
-	OS       string   `json:"os"`
-	Version  string   `json:"version"`
-	Packages []string `json:"package"`
+	OS                string   `json:"os"`
+	Version           string   `json:"version"`
+	Packages          []string `json:"package"`
+	IncludeCandidates *bool    `json:"include_candidates,omitempty"`
 }
 
 // kbAuditRequest represents a KB audit request.
@@ -63,6 +73,7 @@ type auditResponse struct {
 	// CVSS is returned as an object, not a simple float
 	CVSS          *CVSS  `json:"cvss,omitempty"`
 	CumulativeFix string `json:"cumulativeFix,omitempty"`
+	ID            string `json:"id,omitempty"`
 }
 
 // AuditVuln represents a vulnerability found for a package.
@@ -123,10 +134,16 @@ func (s *AuditService) LinuxAudit(ctx context.Context, osName, osVersion string,
 		return nil, err
 	}
 
+	var cfg auditConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
+
 	req := linuxAuditRequest{
-		OS:       osName,
-		Version:  osVersion,
-		Packages: packages,
+		OS:                osName,
+		Version:           osVersion,
+		Packages:          packages,
+		IncludeCandidates: cfg.includeCandidates,
 	}
 
 	var resp auditResponse
@@ -201,6 +218,7 @@ func (s *AuditService) convertResponse(resp *auditResponse) *AuditResult {
 		Reasons:       resp.Reasons,
 		CVEList:       resp.CVEList,
 		CumulativeFix: resp.CumulativeFix,
+		ID:            resp.ID,
 	}
 
 	// Extract CVSS score from the CVSS object

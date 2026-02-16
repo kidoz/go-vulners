@@ -42,10 +42,17 @@ func WithVendor(vendor string) CPEOption {
 	}
 }
 
-// cpeSearchResponse represents the CPE search API response.
+// cpeSearchResponse represents the CPE search API response fields.
 type cpeSearchResponse struct {
 	BestMatch string   `json:"best_match,omitempty"`
 	CPE       []string `json:"cpe,omitempty"`
+}
+
+// cpeV4Response wraps cpeSearchResponse for the v4 API format.
+// The v4 /api/v4/search/cpe endpoint returns {"result": {"best_match": "...", "cpe": [...]}}
+// instead of the v3 {"result": "OK", "data": {...}} format.
+type cpeV4Response struct {
+	Result cpeSearchResponse `json:"result"`
 }
 
 // aiScoreRequest represents an AI score request.
@@ -114,14 +121,14 @@ func (s *MiscService) SearchCPE(ctx context.Context, product, vendor string, opt
 		params["size"] = strconv.Itoa(cfg.size)
 	}
 
-	var resp cpeSearchResponse
+	var resp cpeV4Response
 	if err := s.transport.doGet(ctx, "/api/v4/search/cpe", params, &resp); err != nil {
 		return nil, err
 	}
 
 	return &CPESearchResult{
-		BestMatch: resp.BestMatch,
-		CPEs:      resp.CPE,
+		BestMatch: resp.Result.BestMatch,
+		CPEs:      resp.Result.CPE,
 	}, nil
 }
 

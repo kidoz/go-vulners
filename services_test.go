@@ -491,15 +491,23 @@ func TestReportService_HostVulns(t *testing.T) {
 }
 
 func TestMiscService_SearchCPE(t *testing.T) {
-	data := map[string]interface{}{
-		"best_match": "cpe:2.3:a:google:chrome:96.0.4664.110:*:*:*:*:*:*:*",
-		"cpe": []string{
-			"cpe:2.3:a:google:chrome:96.0.4664.110:*:*:*:*:*:*:*",
-			"cpe:2.3:a:google:chrome:96.0.4664.93:*:*:*:*:*:*:*",
-		},
+	// Simulate the v4 API response format: {"result": {"best_match": "...", "cpe": [...]}}
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]interface{}{
+			"result": map[string]interface{}{
+				"best_match": "cpe:2.3:a:google:chrome:96.0.4664.110:*:*:*:*:*:*:*",
+				"cpe": []string{
+					"cpe:2.3:a:google:chrome:96.0.4664.110:*:*:*:*:*:*:*",
+					"cpe:2.3:a:google:chrome:96.0.4664.93:*:*:*:*:*:*:*",
+				},
+			},
+		}
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	client := newTestClient(t, jsonHandler(t, data))
+	client := newTestClient(t, handler)
 
 	result, err := client.Misc().SearchCPE(context.Background(), "chrome", "google")
 	if err != nil {
@@ -510,8 +518,9 @@ func TestMiscService_SearchCPE(t *testing.T) {
 		t.Errorf("expected 2 CPEs, got %d", len(result.CPEs))
 	}
 
-	if result.BestMatch == "" {
-		t.Error("expected non-empty BestMatch")
+	expected := "cpe:2.3:a:google:chrome:96.0.4664.110:*:*:*:*:*:*:*"
+	if result.BestMatch != expected {
+		t.Errorf("expected BestMatch=%q, got %q", expected, result.BestMatch)
 	}
 }
 

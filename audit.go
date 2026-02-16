@@ -62,6 +62,18 @@ type winAuditRequest struct {
 	Software  []WinAuditItem `json:"software,omitempty"`
 }
 
+// auditV4Response wraps []SoftwareAuditItem for the v4 API format.
+// The v4 /api/v4/audit/software and /api/v4/audit/host endpoints return
+// {"result": [...]} instead of the v3 {"result": "OK", "data": {...}} format.
+type auditV4Response struct {
+	Result []SoftwareAuditItem `json:"result"`
+}
+
+// supportedOSResponse represents the getSupportedOS API response.
+type supportedOSResponse struct {
+	OperatingSystems []string `json:"operating_systems"`
+}
+
 // auditResponse represents the audit API response.
 type auditResponse struct {
 	// Packages is map[packageName]map[bulletinID][]AuditVuln per OpenAPI spec
@@ -92,23 +104,23 @@ type AuditVuln struct {
 
 // Software performs a software audit using the v4 API.
 // It checks the provided software items for known vulnerabilities.
-func (s *AuditService) Software(ctx context.Context, software []AuditItem, opts ...AuditOption) (*AuditResult, error) {
+func (s *AuditService) Software(ctx context.Context, software []AuditItem, opts ...AuditOption) (*SoftwareAuditResult, error) {
 	req := softwareAuditRequest{
 		Software: software,
 		Version:  4,
 	}
 
-	var resp auditResponse
+	var resp auditV4Response
 	if err := s.transport.doPost(ctx, "/api/v4/audit/software/", req, &resp); err != nil {
 		return nil, err
 	}
 
-	return s.convertResponse(&resp), nil
+	return &SoftwareAuditResult{Items: resp.Result}, nil
 }
 
 // Host performs a host audit using the v4 API.
 // It checks the OS and installed packages for vulnerabilities.
-func (s *AuditService) Host(ctx context.Context, os, osVersion string, packages []AuditItem, opts ...AuditOption) (*AuditResult, error) {
+func (s *AuditService) Host(ctx context.Context, os, osVersion string, packages []AuditItem, opts ...AuditOption) (*SoftwareAuditResult, error) {
 	if err := validateRequired("os", os); err != nil {
 		return nil, err
 	}
@@ -119,12 +131,12 @@ func (s *AuditService) Host(ctx context.Context, os, osVersion string, packages 
 		Packages:  packages,
 	}
 
-	var resp auditResponse
+	var resp auditV4Response
 	if err := s.transport.doPost(ctx, "/api/v4/audit/host/", req, &resp); err != nil {
 		return nil, err
 	}
 
-	return s.convertResponse(&resp), nil
+	return &SoftwareAuditResult{Items: resp.Result}, nil
 }
 
 // LinuxAudit performs a Linux-specific audit.
@@ -194,6 +206,17 @@ func (s *AuditService) WinAudit(ctx context.Context, os, osVersion string, kbLis
 	}
 
 	return s.convertResponse(&resp), nil
+}
+
+// GetSupportedOS returns the list of operating system identifiers that are valid
+// inputs for Linux-package audit requests.
+func (s *AuditService) GetSupportedOS(ctx context.Context) ([]string, error) {
+	var resp supportedOSResponse
+	if err := s.transport.doGet(ctx, "/api/v3/audit/getSupportedOS", nil, &resp); err != nil {
+		return nil, err
+	}
+
+	return resp.OperatingSystems, nil
 }
 
 // SBOMAudit performs an SBOM-based audit by uploading an SBOM file.

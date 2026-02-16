@@ -49,6 +49,19 @@ func jsonHandler(t *testing.T, data interface{}) http.HandlerFunc {
 	}
 }
 
+// v4Handler creates a handler that returns a v4-style response: {"result": data}
+// instead of the v3 wrapper {"result": "OK", "data": ...}.
+func v4Handler(t *testing.T, data interface{}) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		resp := map[string]interface{}{
+			"result": data,
+		}
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestArchiveService_FetchCollection(t *testing.T) {
 	expectedBulletins := []Bulletin{
 		{ID: "CVE-2021-44228", Title: "Log4Shell"},
@@ -327,7 +340,7 @@ func TestStixService_MakeBundleByID(t *testing.T) {
 		ID:   "bundle--12345",
 	}
 
-	client := newTestClient(t, jsonHandler(t, data))
+	client := newTestClient(t, v4Handler(t, data))
 
 	bundle, err := client.Stix().MakeBundleByID(context.Background(), "CVE-2021-44228")
 	if err != nil {
@@ -362,7 +375,7 @@ func TestStixService_MakeBundleByCVE(t *testing.T) {
 		ID:   "bundle--67890",
 	}
 
-	client := newTestClient(t, jsonHandler(t, data))
+	client := newTestClient(t, v4Handler(t, data))
 
 	bundle, err := client.Stix().MakeBundleByCVE(context.Background(), "CVE-2021-44228")
 	if err != nil {
@@ -832,6 +845,91 @@ func TestAuditService_SBOMAuditNilReader(t *testing.T) {
 
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Errorf("expected ErrInvalidInput, got %v", err)
+	}
+}
+
+func TestAuditService_Software(t *testing.T) {
+	items := []SoftwareAuditItem{
+		{
+			MatchedCriteria: "cpe:2.3:a:nginx:nginx:1.18.0:*:*:*:*:*:*:*",
+			Vulnerabilities: []Bulletin{
+				{ID: "CVE-2021-23017", Title: "nginx DNS resolver vulnerability"},
+			},
+		},
+	}
+
+	client := newTestClient(t, v4Handler(t, items))
+
+	result, err := client.Audit().Software(context.Background(), []AuditItem{
+		{Software: "nginx", Version: "1.18.0", Type: "software"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(result.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(result.Items))
+	}
+
+	if result.Items[0].MatchedCriteria != "cpe:2.3:a:nginx:nginx:1.18.0:*:*:*:*:*:*:*" {
+		t.Errorf("expected MatchedCriteria=cpe:2.3:a:nginx:nginx:1.18.0:*:*:*:*:*:*:*, got %s", result.Items[0].MatchedCriteria)
+	}
+
+	if len(result.Items[0].Vulnerabilities) != 1 {
+		t.Fatalf("expected 1 vulnerability, got %d", len(result.Items[0].Vulnerabilities))
+	}
+
+	if result.Items[0].Vulnerabilities[0].ID != "CVE-2021-23017" {
+		t.Errorf("expected ID=CVE-2021-23017, got %s", result.Items[0].Vulnerabilities[0].ID)
+	}
+}
+
+func TestAuditService_Host(t *testing.T) {
+	items := []SoftwareAuditItem{
+		{
+			MatchedCriteria: "cpe:2.3:a:nginx:nginx:1.18.0:*:*:*:*:*:*:*",
+			Vulnerabilities: []Bulletin{
+				{ID: "CVE-2021-23017", Title: "nginx DNS resolver vulnerability"},
+			},
+		},
+	}
+
+	client := newTestClient(t, v4Handler(t, items))
+
+	result, err := client.Audit().Host(context.Background(), "ubuntu", "22.04", []AuditItem{
+		{Software: "nginx", Version: "1.18.0"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(result.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(result.Items))
+	}
+
+	if result.Items[0].Vulnerabilities[0].ID != "CVE-2021-23017" {
+		t.Errorf("expected ID=CVE-2021-23017, got %s", result.Items[0].Vulnerabilities[0].ID)
+	}
+}
+
+func TestAuditService_GetSupportedOS(t *testing.T) {
+	data := supportedOSResponse{
+		OperatingSystems: []string{"centos", "debian", "ubuntu", "rhel", "oraclelinux"},
+	}
+
+	client := newTestClient(t, jsonHandler(t, data))
+
+	osList, err := client.Audit().GetSupportedOS(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(osList) != 5 {
+		t.Fatalf("expected 5 OS entries, got %d", len(osList))
+	}
+
+	if osList[0] != "centos" {
+		t.Errorf("expected first OS=centos, got %s", osList[0])
 	}
 }
 

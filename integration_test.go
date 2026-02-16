@@ -206,6 +206,110 @@ func TestIntegration_QueryAutocomplete(t *testing.T) {
 	}
 }
 
+func TestIntegration_SoftwareAudit(t *testing.T) {
+	client := getTestClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	software := []AuditItem{
+		{Software: "nginx", Version: "1.18.0", Type: "software"},
+	}
+
+	result, err := client.Audit().Software(ctx, software)
+	if err != nil {
+		t.Fatalf("Software audit failed: %v", err)
+	}
+
+	t.Logf("Software audit: %d items returned", len(result.Items))
+	for _, item := range result.Items {
+		t.Logf("  Matched: %s, Vulnerabilities: %d", item.MatchedCriteria, len(item.Vulnerabilities))
+		for i, v := range item.Vulnerabilities {
+			if i >= 3 {
+				t.Logf("    ... and %d more", len(item.Vulnerabilities)-3)
+				break
+			}
+			t.Logf("    - %s: %s", v.ID, v.Title)
+		}
+	}
+}
+
+func TestIntegration_StixBundleByID(t *testing.T) {
+	client := getTestClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	bundle, err := client.Stix().MakeBundleByID(ctx, "CVE-2021-44228")
+	if err != nil {
+		t.Fatalf("MakeBundleByID failed: %v", err)
+	}
+
+	if bundle.Type != "bundle" {
+		t.Errorf("expected Type=bundle, got %s", bundle.Type)
+	}
+	if bundle.ID == "" {
+		t.Error("expected non-empty bundle ID")
+	}
+
+	t.Logf("STIX bundle: %s (objects: %d)", bundle.ID, len(bundle.Objects))
+}
+
+func TestIntegration_StixBundleByCVE(t *testing.T) {
+	client := getTestClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	bundle, err := client.Stix().MakeBundleByCVE(ctx, "CVE-2021-44228")
+	if err != nil {
+		t.Fatalf("MakeBundleByCVE failed: %v", err)
+	}
+
+	if bundle.Type != "bundle" {
+		t.Errorf("expected Type=bundle, got %s", bundle.Type)
+	}
+
+	t.Logf("STIX bundle by CVE: %s (objects: %d)", bundle.ID, len(bundle.Objects))
+}
+
+func TestIntegration_GetBulletinHistory(t *testing.T) {
+	client := getTestClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	history, err := client.Search().GetBulletinHistory(ctx, "CVE-2021-44228")
+	if err != nil {
+		t.Fatalf("GetBulletinHistory failed: %v", err)
+	}
+
+	t.Logf("History entries: %d", len(history))
+	for i, entry := range history {
+		if i >= 5 {
+			t.Logf("  ... and %d more", len(history)-5)
+			break
+		}
+		t.Logf("  - %s: %s", entry.Date, entry.Description)
+	}
+}
+
+func TestIntegration_GetSupportedOS(t *testing.T) {
+	client := getTestClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	osList, err := client.Audit().GetSupportedOS(ctx)
+	if err != nil {
+		t.Fatalf("GetSupportedOS failed: %v", err)
+	}
+
+	if len(osList) == 0 {
+		t.Error("expected at least one supported OS")
+	}
+
+	t.Logf("Supported operating systems (%d):", len(osList))
+	for _, os := range osList {
+		t.Logf("  - %s", os)
+	}
+}
+
 func TestIntegration_ContextCancellation(t *testing.T) {
 	client := getTestClient(t)
 

@@ -56,7 +56,7 @@ func main() {
 	if err != nil {
 		log.Printf("Software audit error: %v\n", err)
 	} else {
-		printAuditResult("Software Audit", softwareResult)
+		printSoftwareAuditResult("Software Audit", softwareResult)
 	}
 
 	// Example 3: Windows KB audit
@@ -101,5 +101,29 @@ func printAuditResult(name string, result *vulners.AuditResult) {
 
 	if result.CumulativeFix != "" {
 		fmt.Printf("  Cumulative fix: %s\n", result.CumulativeFix)
+	}
+}
+
+func printSoftwareAuditResult(name string, result *vulners.SoftwareAuditResult) {
+	fmt.Printf("\n%s Results:\n", name)
+	fmt.Printf("  Items: %d\n", len(result.Items))
+
+	for _, item := range result.Items {
+		if item.MatchedCriteria != "" {
+			fmt.Printf("  Matched: %s\n", item.MatchedCriteria)
+		}
+		fmt.Printf("  Vulnerabilities: %d\n", len(item.Vulnerabilities))
+		count := 5
+		if len(item.Vulnerabilities) < count {
+			count = len(item.Vulnerabilities)
+		}
+		for i := 0; i < count; i++ {
+			v := item.Vulnerabilities[i]
+			cvss := 0.0
+			if v.CVSS != nil {
+				cvss = v.CVSS.Score
+			}
+			fmt.Printf("    - %s: %s (CVSS: %.1f)\n", v.ID, v.Title, cvss)
+		}
 	}
 }

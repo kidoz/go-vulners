@@ -214,6 +214,18 @@ type AuditResult struct {
 	ID              string          `json:"id,omitempty"`
 }
 
+// SoftwareAuditResult represents the response from the v4 software and host audit endpoints.
+type SoftwareAuditResult struct {
+	Items []SoftwareAuditItem `json:"items,omitempty"`
+}
+
+// SoftwareAuditItem represents a single software item's audit results from the v4 API.
+type SoftwareAuditItem struct {
+	Input           json.RawMessage `json:"input,omitempty"`
+	MatchedCriteria string          `json:"matched_criteria,omitempty"`
+	Vulnerabilities []Bulletin      `json:"vulnerabilities,omitempty"`
+}
+
 // Vulnerability represents a vulnerability found during audit.
 type Vulnerability struct {
 	Package    string   `json:"package,omitempty"`

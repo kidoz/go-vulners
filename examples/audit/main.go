@@ -37,19 +37,19 @@ func main() {
 		"curl 7.68.0-1ubuntu2",
 	}
 
-	linuxResult, err := client.Audit().LinuxAudit(ctx, "Ubuntu", "22.04", packages)
+	linuxResult, err := client.Audit().LinuxAuditV4(ctx, "Ubuntu", "22.04", packages)
 	if err != nil {
 		log.Printf("Linux audit error: %v\n", err)
 	} else {
-		printAuditResult("Linux Audit", linuxResult)
+		printPackageAuditResult("Linux Audit", linuxResult)
 	}
 
 	// Example 2: Audit software items
 	fmt.Println("\n=== Software Audit ===")
 	software := []vulners.AuditItem{
-		{Software: "nginx", Version: "1.18.0", Type: "software"},
-		{Software: "apache", Version: "2.4.41", Type: "software"},
-		{Software: "mysql", Version: "8.0.23", Type: "software"},
+		{Part: "a", Product: "nginx", Version: "1.18.0"},
+		{Part: "a", Product: "apache", Version: "2.4.41"},
+		{Part: "a", Product: "mysql", Version: "8.0.23"},
 	}
 
 	softwareResult, err := client.Audit().Software(ctx, software)
@@ -75,6 +75,17 @@ func main() {
 	}
 
 	fmt.Println("\nDone!")
+}
+
+func printPackageAuditResult(name string, result *vulners.PackageAuditResult) {
+	fmt.Printf("\n%s Results:\n", name)
+	fmt.Printf("  Packages analyzed: %d\n", result.TotalPackages)
+	fmt.Printf("  Issues: %d\n", len(result.Issues))
+	fmt.Printf("  Parse errors: %d\n", len(result.Errors))
+
+	for _, issue := range result.Issues {
+		fmt.Printf("    - %s: %d advisories\n", issue.Package, len(issue.ApplicableAdvisories))
+	}
 }
 
 func printAuditResult(name string, result *vulners.AuditResult) {

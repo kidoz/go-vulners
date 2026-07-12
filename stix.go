@@ -3,6 +3,7 @@ package vulners
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 )
 
 // StixService provides methods for STIX bundle generation.
@@ -35,7 +36,7 @@ type StixBundle struct {
 // The v4 /api/v4/stix/bundle endpoint returns {"result": {"type":"bundle","id":"...","objects":[...]}}
 // instead of the v3 {"result": "OK", "data": {...}} format.
 type stixV4Response struct {
-	Result StixBundle `json:"result"`
+	Result json.RawMessage `json:"result"`
 }
 
 // MakeBundleByID generates a STIX bundle for a given bulletin ID.
@@ -52,20 +53,14 @@ func (s *StixService) MakeBundleByID(ctx context.Context, bulletinID string, opt
 		opt(cfg)
 	}
 
-	params := map[string]string{
-		"bulletinId": bulletinID,
-	}
-
-	if cfg.version != "" {
-		params["version"] = cfg.version
-	}
+	params := map[string]string{"id": bulletinID}
 
 	var resp stixV4Response
 	if err := s.transport.doGet(ctx, "/api/v4/stix/bundle", params, &resp); err != nil {
 		return nil, err
 	}
 
-	return &resp.Result, nil
+	return decodeSTIXBundle(resp.Result)
 }
 
 // MakeBundleByCVE generates a STIX bundle for a given CVE ID.
@@ -74,26 +69,18 @@ func (s *StixService) MakeBundleByCVE(ctx context.Context, cveID string, opts ..
 		return nil, err
 	}
 
-	cfg := &stixConfig{
-		version: "2.1",
+	return s.MakeBundleByID(ctx, cveID, opts...)
+}
+
+func decodeSTIXBundle(raw json.RawMessage) (*StixBundle, error) {
+	var encoded string
+	if err := json.Unmarshal(raw, &encoded); err == nil {
+		raw = json.RawMessage(encoded)
 	}
 
-	for _, opt := range opts {
-		opt(cfg)
+	var bundle StixBundle
+	if err := json.Unmarshal(raw, &bundle); err != nil {
+		return nil, fmt.Errorf("failed to decode STIX bundle: %w", err)
 	}
-
-	params := map[string]string{
-		"cveId": cveID,
-	}
-
-	if cfg.version != "" {
-		params["version"] = cfg.version
-	}
-
-	var resp stixV4Response
-	if err := s.transport.doGet(ctx, "/api/v4/stix/bundle", params, &resp); err != nil {
-		return nil, err
-	}
-
-	return &resp.Result, nil
+	return &bundle, nil
 }

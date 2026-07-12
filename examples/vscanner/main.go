@@ -36,7 +36,7 @@ func main() {
 	} else {
 		fmt.Printf("Found %d licenses:\n", len(licenses))
 		for _, lic := range licenses {
-			fmt.Printf("  - ID: %s, Type: %s, Hosts: %d\n", lic.ID, lic.Type, lic.Hosts)
+			fmt.Printf("  - ID: %s, Type: %s\n", lic.ID, lic.Type)
 		}
 	}
 
@@ -50,14 +50,12 @@ func main() {
 	} else {
 		fmt.Printf("Found %d projects:\n", len(projects))
 		for _, p := range projects {
-			fmt.Printf("  - %s: %s (Tasks: %d, Hosts: %d, Vulns: %d)\n",
-				p.ID, p.Name, p.TaskCount, p.HostCount, p.VulnCount)
+			fmt.Printf("  - %s: %s (License: %s)\n", p.ID, p.Name, p.LicenseID)
 		}
 
-		// If we have projects, show tasks for the first one
+		// If we have projects, show tasks and results for the first one.
 		if len(projects) > 0 {
-			project := projects[0]
-			showProjectDetails(ctx, client, project.ID)
+			showProjectDetails(ctx, client, projects[0].ID)
 		}
 	}
 
@@ -75,13 +73,14 @@ func showProjectDetails(ctx context.Context, client *vscanner.Client, projectID 
 
 	fmt.Printf("Found %d tasks:\n", len(tasks))
 	for i := range tasks {
-		fmt.Printf("  - %s: %s (Status: %s)\n", tasks[i].ID, tasks[i].Name, tasks[i].Status)
+		fmt.Printf("  - %s: %s (Enabled: %t, Schedule: %q)\n",
+			tasks[i].ID, tasks[i].Name, tasks[i].Enabled, tasks[i].Schedule)
 	}
 
-	// Show results
+	// Show results.
 	fmt.Printf("\n=== Results for Project %s ===\n", projectID)
 	results, err := client.Result().List(ctx, projectID,
-		vscanner.WithListLimit(5),
+		vscanner.WithResultLimit(5),
 	)
 	if err != nil {
 		log.Printf("Error listing results: %v\n", err)
@@ -89,20 +88,22 @@ func showProjectDetails(ctx context.Context, client *vscanner.Client, projectID 
 	}
 
 	fmt.Printf("Found %d results:\n", len(results))
-	for _, r := range results {
-		fmt.Printf("  - %s: Task=%s, Status=%s, Hosts=%d, Vulns=%d\n",
-			r.ID, r.TaskName, r.Status, r.HostCount, r.VulnCount)
+	for i := range results {
+		fmt.Printf("  - %s (%d screenshots)\n", results[i].ID, len(results[i].Screens))
+	}
 
-		// Get statistics for completed scans
-		if r.Status == "completed" && r.ID != "" {
-			stats, err := client.Result().GetStatistics(ctx, projectID, r.ID)
-			if err == nil && stats != nil {
-				fmt.Printf("    Statistics: Total Hosts=%d, Total Vulns=%d\n",
-					stats.TotalHosts, stats.TotalVulns)
-				if len(stats.BySeverity) > 0 {
-					fmt.Printf("    By Severity: %v\n", stats.BySeverity)
-				}
-			}
-		}
+	// Project-level statistics.
+	fmt.Printf("\n=== Statistics for Project %s ===\n", projectID)
+	stats, err := client.Project().GetStatistics(ctx, projectID,
+		vscanner.StatTotalHosts,
+		vscanner.StatVulnerableHosts,
+		vscanner.StatUniqueCVE,
+	)
+	if err != nil {
+		log.Printf("Error getting statistics: %v\n", err)
+		return
+	}
+	for name, value := range stats {
+		fmt.Printf("  - %s: %s\n", name, value)
 	}
 }

@@ -10,7 +10,7 @@ import (
 )
 
 func ExampleNewClient() {
-	// Create a new VScanner client
+	// Create a new VScanner client.
 	client, err := vscanner.NewClient("your-api-key")
 	if err != nil {
 		log.Fatal(err)
@@ -20,7 +20,7 @@ func ExampleNewClient() {
 }
 
 func ExampleNewClient_withOptions() {
-	// Create a client with custom settings
+	// Create a client with custom settings.
 	client, err := vscanner.NewClient("your-api-key",
 		vscanner.WithTimeout(60*time.Second),
 		vscanner.WithRetries(5),
@@ -41,7 +41,7 @@ func ExampleProjectService_List() {
 
 	ctx := context.Background()
 
-	// List all projects
+	// List all projects.
 	projects, err := client.Project().List(ctx)
 	if err != nil {
 		log.Fatal(err)
@@ -60,10 +60,11 @@ func ExampleProjectService_Create() {
 
 	ctx := context.Background()
 
-	// Create a new project
+	// A license id is required; fetch one via client.GetLicenses.
 	project, err := client.Project().Create(ctx, &vscanner.ProjectRequest{
-		Name:        "My Scanning Project",
-		Description: "Vulnerability scanning for production systems",
+		Name:         "My Scanning Project",
+		LicenseID:    "your-license-id",
+		Notification: vscanner.DisabledNotification(),
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -81,15 +82,14 @@ func ExampleTaskService_Create() {
 	ctx := context.Background()
 	projectID := "your-project-id"
 
-	// Create a scanning task
+	// Create a scanning task (schedule is a crontab string).
 	task, err := client.Task().Create(ctx, projectID, &vscanner.TaskRequest{
-		Name:        "Network Scan",
-		Description: "Scan internal network",
-		Targets:     []string{"192.168.1.0/24"},
-		Config: &vscanner.TaskConfig{
-			ScanType: "normal",
-			Ports:    "1-1000",
-		},
+		Name:     "Network Scan",
+		Networks: []string{"192.168.1.0/24"},
+		Ports:    []string{"1-1000"},
+		Schedule: "0 2 * * *",
+		Timing:   "normal",
+		Enabled:  true,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -105,16 +105,14 @@ func ExampleTaskService_Start() {
 	}
 
 	ctx := context.Background()
-	projectID := "your-project-id"
-	taskID := "your-task-id"
 
-	// Start a scanning task
-	err = client.Task().Start(ctx, projectID, taskID)
+	// Start a scanning task as soon as possible.
+	task, err := client.Task().Start(ctx, "your-project-id", "your-task-id")
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	fmt.Println("Task started successfully")
+	fmt.Printf("Task started: %s\n", task.ID)
 }
 
 func ExampleResultService_List() {
@@ -126,22 +124,21 @@ func ExampleResultService_List() {
 	ctx := context.Background()
 	projectID := "your-project-id"
 
-	// List scan results
+	// List scan results, filtered and sorted.
 	results, err := client.Result().List(ctx, projectID,
-		vscanner.WithListLimit(10),
-		vscanner.WithListSort("startedAt", false),
+		vscanner.WithResultLimit(10),
+		vscanner.WithResultSort("last_seen", false),
 	)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	for _, r := range results {
-		fmt.Printf("Scan %s: %d hosts, %d vulnerabilities\n",
-			r.ID, r.HostCount, r.VulnCount)
+		fmt.Printf("Result %s (%d screenshots)\n", r.ID, len(r.Screens))
 	}
 }
 
-func ExampleResultService_GetStatistics() {
+func ExampleProjectService_GetStatistics() {
 	client, err := vscanner.NewClient("your-api-key")
 	if err != nil {
 		log.Fatal(err)
@@ -149,42 +146,17 @@ func ExampleResultService_GetStatistics() {
 
 	ctx := context.Background()
 	projectID := "your-project-id"
-	resultID := "your-result-id"
 
-	// Get scan statistics
-	stats, err := client.Result().GetStatistics(ctx, projectID, resultID)
+	// Get project statistics aggregations.
+	stats, err := client.Project().GetStatistics(ctx, projectID,
+		vscanner.StatTotalHosts,
+		vscanner.StatUniqueCVE,
+	)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	fmt.Printf("Total hosts: %d\n", stats.TotalHosts)
-	fmt.Printf("Total vulnerabilities: %d\n", stats.TotalVulns)
-	if stats.BySeverity != nil {
-		fmt.Printf("Critical: %d\n", stats.BySeverity["critical"])
-		fmt.Printf("High: %d\n", stats.BySeverity["high"])
-	}
-}
-
-func ExampleResultService_GetHosts() {
-	client, err := vscanner.NewClient("your-api-key")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	ctx := context.Background()
-	projectID := "your-project-id"
-	resultID := "your-result-id"
-
-	// Get hosts from scan results
-	hosts, err := client.Result().GetHosts(ctx, projectID, resultID)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	for _, h := range hosts {
-		fmt.Printf("Host %s: %d vulns (Critical: %d, High: %d)\n",
-			h.Host, h.VulnCount, h.Critical, h.High)
-	}
+	fmt.Printf("total_hosts: %s\n", stats[vscanner.StatTotalHosts])
 }
 
 func Example_workflow() {
@@ -195,44 +167,46 @@ func Example_workflow() {
 
 	ctx := context.Background()
 
-	// 1. Create a project
+	// 1. Pick a license.
+	licenses, err := client.GetLicenses(ctx)
+	if err != nil || len(licenses) == 0 {
+		log.Fatal("no licenses available")
+	}
+
+	// 2. Create a project.
 	project, err := client.Project().Create(ctx, &vscanner.ProjectRequest{
-		Name: "Security Assessment",
+		Name:         "Security Assessment",
+		LicenseID:    licenses[0].ID,
+		Notification: vscanner.DisabledNotification(),
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 	fmt.Printf("Created project: %s\n", project.ID)
 
-	// 2. Create a task
+	// 3. Create a task.
 	task, err := client.Task().Create(ctx, project.ID, &vscanner.TaskRequest{
-		Name:    "Initial Scan",
-		Targets: []string{"192.168.1.1"},
-		Config: &vscanner.TaskConfig{
-			ScanType: "fast",
-			Ports:    "22,80,443",
-		},
+		Name:     "Initial Scan",
+		Networks: []string{"192.168.1.1"},
+		Ports:    []string{"22", "80", "443"},
+		Schedule: "0 3 * * *",
+		Timing:   "normal",
+		Enabled:  true,
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 	fmt.Printf("Created task: %s\n", task.ID)
 
-	// 3. Start the task
-	err = client.Task().Start(ctx, project.ID, task.ID)
-	if err != nil {
+	// 4. Start the task now.
+	if _, err := client.Task().Start(ctx, project.ID, task.ID); err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("Task started")
 
-	// 4. Wait for results and view them
-	// (In practice, you'd poll for task completion)
+	// 5. Later, fetch results.
 	results, err := client.Result().List(ctx, project.ID)
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	for _, r := range results {
-		fmt.Printf("Result: %d vulnerabilities found\n", r.VulnCount)
-	}
+	fmt.Printf("Found %d results\n", len(results))
 }

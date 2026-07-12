@@ -215,25 +215,33 @@ if err != nil {
     log.Fatal(err)
 }
 
+// Licenses (a license id is required to create a project)
+licenses, err := client.GetLicenses(ctx)
+
 // List projects
 projects, err := client.Project().List(ctx)
 
 // Create a project
 project, err := client.Project().Create(ctx, &vscanner.ProjectRequest{
-    Name:        "My Project",
-    Description: "Vulnerability scanning project",
+    Name:         "My Project",
+    LicenseID:    licenses[0].ID,
+    Notification: vscanner.DisabledNotification(),
 })
 
-// Create and run a task
+// Create and run a task (schedule is a crontab string)
 task, err := client.Task().Create(ctx, project.ID, &vscanner.TaskRequest{
-    Name:   "Scan Task",
-    Hosts:  []string{"192.168.1.0/24"},
-    Ports:  "1-1000",
+    Name:     "Scan Task",
+    Networks: []string{"192.168.1.0/24"},
+    Ports:    []string{"1-1000"},
+    Schedule: "0 2 * * *",
+    Timing:   "normal",
+    Enabled:  true,
 })
-err = client.Task().Start(ctx, project.ID, task.ID)
+task, err = client.Task().Start(ctx, project.ID, task.ID)
 
-// Get results
+// Get results and project statistics
 results, err := client.Result().List(ctx, project.ID)
+stats, err := client.Project().GetStatistics(ctx, project.ID, vscanner.StatTotalHosts)
 ```
 
 ## Error Handling

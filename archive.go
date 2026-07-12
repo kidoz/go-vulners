@@ -1,7 +1,13 @@
 package vulners
 
 import (
+	"bufio"
+	"bytes"
+	"compress/gzip"
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
 	"time"
 )
 
@@ -35,24 +41,13 @@ const (
 	CollectionVMware    CollectionType = "vmware"
 )
 
-// collectionResponse represents the collection API response.
-type collectionResponse struct {
-	Bulletins []Bulletin `json:"bulletins,omitempty"`
-	Total     int        `json:"total,omitempty"`
-}
-
 // FetchCollection fetches all bulletins for a given collection type.
 func (s *ArchiveService) FetchCollection(ctx context.Context, collType CollectionType) ([]Bulletin, error) {
 	params := map[string]string{
 		"type": string(collType),
 	}
 
-	var resp collectionResponse
-	if err := s.transport.doGet(ctx, "/api/v4/archive/collection", params, &resp); err != nil {
-		return nil, err
-	}
-
-	return resp.Bulletins, nil
+	return s.fetchArchive(ctx, "/api/v4/archive/collection", params)
 }
 
 // FetchCollectionUpdate fetches bulletins updated after a given timestamp.
@@ -63,10 +58,57 @@ func (s *ArchiveService) FetchCollectionUpdate(ctx context.Context, collType Col
 		"after": after.UTC().Format(time.RFC3339),
 	}
 
-	var resp collectionResponse
-	if err := s.transport.doGet(ctx, "/api/v4/archive/collection-update", params, &resp); err != nil {
+	return s.fetchArchive(ctx, "/api/v4/archive/collection-update", params)
+}
+
+func (s *ArchiveService) fetchArchive(ctx context.Context, path string, params map[string]string) ([]Bulletin, error) {
+	data, err := s.transport.doGetBytes(ctx, path, params)
+	if err != nil {
 		return nil, err
 	}
 
-	return resp.Bulletins, nil
+	var reader io.Reader = bytes.NewReader(data)
+	if len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b {
+		gzReader, err := gzip.NewReader(reader)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open archive gzip stream: %w", err)
+		}
+		defer func() { _ = gzReader.Close() }()
+		reader = gzReader
+	}
+
+	decoded, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read archive stream: %w", err)
+	}
+	decoded = bytes.TrimSpace(decoded)
+	if len(decoded) == 0 {
+		return []Bulletin{}, nil
+	}
+	if decoded[0] == '[' {
+		var bulletins []Bulletin
+		if err := json.Unmarshal(decoded, &bulletins); err != nil {
+			return nil, fmt.Errorf("failed to decode archive array: %w", err)
+		}
+		return bulletins, nil
+	}
+
+	var bulletins []Bulletin
+	scanner := bufio.NewScanner(bytes.NewReader(decoded))
+	scanner.Buffer(make([]byte, 64*1024), maxResponseSize)
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		var bulletin Bulletin
+		if err := json.Unmarshal(line, &bulletin); err != nil {
+			return nil, fmt.Errorf("failed to decode archive entry: %w", err)
+		}
+		bulletins = append(bulletins, bulletin)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read archive stream: %w", err)
+	}
+	return bulletins, nil
 }

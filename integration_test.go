@@ -286,7 +286,7 @@ func TestIntegration_GetBulletinHistory(t *testing.T) {
 			t.Logf("  ... and %d more", len(history)-5)
 			break
 		}
-		t.Logf("  - %s: %s", entry.Date, entry.Description)
+		t.Logf("  - %s at %s", entry.Field, entry.Published)
 	}
 }
 

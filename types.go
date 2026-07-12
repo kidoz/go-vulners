@@ -21,6 +21,8 @@ type Bulletin struct {
 	CVSS2            *CVSS              `json:"cvss2,omitempty"`
 	CVSS3            *CVSS3             `json:"cvss3,omitempty"`
 	CVEList          []string           `json:"cvelist,omitempty"`
+	Superseeds       []string           `json:"superseeds,omitempty"`
+	Parentseeds      []string           `json:"parentseeds,omitempty"`
 	Href             string             `json:"href,omitempty"`
 	SourceHref       string             `json:"sourceHref,omitempty"`
 	SourceData       json.RawMessage    `json:"sourceData,omitempty"`
@@ -195,6 +197,9 @@ type HistoryEntry struct {
 	Date        *Time           `json:"date,omitempty"`
 	Description string          `json:"description,omitempty"`
 	Changes     json.RawMessage `json:"changes,omitempty"`
+	Field       string          `json:"field,omitempty"`
+	Value       json.RawMessage `json:"value,omitempty"`
+	Published   string          `json:"published,omitempty"`
 }
 
 // SearchResult represents a search response from the API.
@@ -202,6 +207,42 @@ type SearchResult struct {
 	Total     int        `json:"total,omitempty"`
 	Bulletins []Bulletin `json:"search,omitempty"`
 	Took      int        `json:"took,omitempty"`
+}
+
+// BulletinsWithReferences groups requested bulletins and their reference bulletins.
+type BulletinsWithReferences struct {
+	Documents  map[string]Bulletin              `json:"documents"`
+	References map[string]map[string][]Bulletin `json:"references"`
+}
+
+// KBSeeds describes the Microsoft updates superseded by and superseding a KB.
+type KBSeeds struct {
+	Superseeds  []string `json:"superseeds"`
+	Parentseeds []string `json:"parentseeds"`
+}
+
+// WebVulnerability describes a vulnerability associated with a web path.
+type WebVulnerability struct {
+	ID               string                 `json:"id"`
+	Type             string                 `json:"type"`
+	WebApplicability WebApplicability       `json:"webApplicability"`
+	Metrics          map[string]interface{} `json:"metrics"`
+	Exploits         []string               `json:"exploits"`
+}
+
+// WebApplicability describes whether and why a bulletin applies to a web path.
+type WebApplicability struct {
+	Applicable      bool                `json:"applicable"`
+	Vulnerabilities []PathVulnerability `json:"vulnerabilities"`
+}
+
+// PathVulnerability describes one vulnerable parameter found at a web path.
+type PathVulnerability struct {
+	Parameter   string   `json:"parameter"`
+	URL         string   `json:"url"`
+	Position    string   `json:"position"`
+	Description string   `json:"description"`
+	CWE         []string `json:"cwe"`
 }
 
 // AuditResult represents an audit response from the API.
@@ -224,6 +265,61 @@ type SoftwareAuditItem struct {
 	Input           json.RawMessage `json:"input,omitempty"`
 	MatchedCriteria string          `json:"matched_criteria,omitempty"`
 	Vulnerabilities []Bulletin      `json:"vulnerabilities,omitempty"`
+}
+
+// PackageAuditResult represents a modern Linux or PURL library audit response.
+type PackageAuditResult struct {
+	Issues        []PackageAuditIssue `json:"issues"`
+	Errors        map[int]string      `json:"errors"`
+	TotalPackages int                 `json:"totalPackages"`
+}
+
+// PackageAuditIssue describes vulnerability matches for one audited package.
+type PackageAuditIssue struct {
+	Package              string                    `json:"package"`
+	Version              *string                   `json:"version"`
+	FixedVersion         *string                   `json:"fixedVersion"`
+	FixedPackage         *string                   `json:"fixedPackage,omitempty"`
+	ApplicableAdvisories []AuditApplicableAdvisory `json:"applicableAdvisories"`
+}
+
+// AuditApplicableAdvisory describes an advisory applicable to an audited package.
+type AuditApplicableAdvisory struct {
+	ID             string                   `json:"id"`
+	Match          string                   `json:"match"`
+	Registry       string                   `json:"registry"`
+	Distro         []string                 `json:"distro,omitempty"`
+	Arch           []string                 `json:"arch,omitempty"`
+	Classifier     []string                 `json:"classifier,omitempty"`
+	CVEListMetrics []map[string]interface{} `json:"cvelistMetrics,omitempty"`
+	Operator       string                   `json:"operator,omitempty"`
+	Version        string                   `json:"version,omitempty"`
+	Published      string                   `json:"published,omitempty"`
+}
+
+// CVEAuditIssue describes packages and CPE configurations affected by a CVE.
+type CVEAuditIssue struct {
+	CVE              string                    `json:"cve"`
+	AffectedPackages []CVEAuditAffectedPackage `json:"affectedPackages"`
+	AffectedCPE      []CVEAuditAffectedCPE     `json:"affectedCpe"`
+}
+
+// CVEAuditAffectedPackage describes an affected package definition.
+type CVEAuditAffectedPackage struct {
+	ID         string   `json:"id"`
+	Name       string   `json:"name"`
+	Range      string   `json:"range"`
+	Registry   string   `json:"registry"`
+	Distro     []string `json:"distro,omitempty"`
+	Arch       []string `json:"arch,omitempty"`
+	Classifier []string `json:"classifier,omitempty"`
+}
+
+// CVEAuditAffectedCPE describes an affected CPE configuration.
+type CVEAuditAffectedCPE struct {
+	ID                string                 `json:"id"`
+	Type              string                 `json:"type"`
+	CPEConfigurations map[string]interface{} `json:"cpeConfigurations"`
 }
 
 // Vulnerability represents a vulnerability found during audit.
@@ -249,9 +345,69 @@ type AuditReason struct {
 
 // AuditItem represents a software item for auditing.
 type AuditItem struct {
-	Software string `json:"software"`
-	Version  string `json:"version"`
-	Type     string `json:"type,omitempty"`
+	Part      string `json:"part,omitempty"`
+	Vendor    string `json:"vendor,omitempty"`
+	Product   string `json:"product,omitempty"`
+	Version   string `json:"version,omitempty"`
+	Update    string `json:"update,omitempty"`
+	Edition   string `json:"edition,omitempty"`
+	Language  string `json:"language,omitempty"`
+	SWEdition string `json:"sw_edition,omitempty"`
+	TargetSW  string `json:"target_sw,omitempty"`
+	TargetHW  string `json:"target_hw,omitempty"`
+	Other     string `json:"other,omitempty"`
+
+	// Software and Type are retained for source compatibility with older releases.
+	// New code should use Product and Part.
+	Software string `json:"-"`
+	Type     string `json:"-"`
+}
+
+// MarshalJSON maps legacy AuditItem fields to the current v4 criteria schema.
+func (a AuditItem) MarshalJSON() ([]byte, error) { //nolint:gocritic // Value receiver supports standalone values.
+	type criteria struct {
+		Part      string `json:"part,omitempty"`
+		Vendor    string `json:"vendor,omitempty"`
+		Product   string `json:"product"`
+		Version   string `json:"version,omitempty"`
+		Update    string `json:"update,omitempty"`
+		Edition   string `json:"edition,omitempty"`
+		Language  string `json:"language,omitempty"`
+		SWEdition string `json:"sw_edition,omitempty"`
+		TargetSW  string `json:"target_sw,omitempty"`
+		TargetHW  string `json:"target_hw,omitempty"`
+		Other     string `json:"other,omitempty"`
+	}
+
+	part := a.Part
+	if part == "" {
+		switch a.Type {
+		case "software", "application":
+			part = "a"
+		case "operating_system", "os":
+			part = "o"
+		case "hardware":
+			part = "h"
+		}
+	}
+	product := a.Product
+	if product == "" {
+		product = a.Software
+	}
+
+	return json.Marshal(criteria{
+		Part:      part,
+		Vendor:    a.Vendor,
+		Product:   product,
+		Version:   a.Version,
+		Update:    a.Update,
+		Edition:   a.Edition,
+		Language:  a.Language,
+		SWEdition: a.SWEdition,
+		TargetSW:  a.TargetSW,
+		TargetHW:  a.TargetHW,
+		Other:     a.Other,
+	})
 }
 
 // WinAuditItem represents a Windows software item for auditing.
@@ -269,7 +425,9 @@ type LinuxAuditRequest struct {
 
 // SBOMAuditResult represents the response from the SBOM audit endpoint.
 type SBOMAuditResult struct {
-	Packages []SBOMPackageResult `json:"result"`
+	Packages      []SBOMPackageResult `json:"data"`
+	SummaryID     string              `json:"summaryId,omitempty"`
+	TotalPackages int                 `json:"totalPackages"`
 }
 
 // SBOMPackageResult represents audit findings for a single package in an SBOM.

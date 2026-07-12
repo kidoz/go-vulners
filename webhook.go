@@ -3,6 +3,7 @@ package vulners
 import (
 	"context"
 	"fmt"
+	"strconv"
 )
 
 // WebhookService provides methods for webhook management.
@@ -17,30 +18,27 @@ type webhookListResponse struct {
 
 // webhookAddRequest represents a webhook add request.
 type webhookAddRequest struct {
-	Query string `json:"query"`
+	Query  string `json:"query"`
+	APIKey string `json:"apiKey"`
 }
 
 // webhookEnableRequest represents a webhook enable/disable request.
 type webhookEnableRequest struct {
-	ID     string `json:"id"`
-	Active bool   `json:"active"`
+	ID     string `json:"subscriptionid"`
+	Active string `json:"active"`
+	APIKey string `json:"apiKey"`
 }
 
 // webhookDeleteRequest represents a webhook delete request.
 type webhookDeleteRequest struct {
-	ID string `json:"id"`
-}
-
-// webhookReadRequest represents a webhook read request.
-type webhookReadRequest struct {
-	ID         string `json:"id"`
-	NewestOnly bool   `json:"newestOnly,omitempty"`
+	ID     string `json:"subscriptionid"`
+	APIKey string `json:"apiKey"`
 }
 
 // List returns all configured webhooks.
 func (s *WebhookService) List(ctx context.Context) ([]Webhook, error) {
 	var resp webhookListResponse
-	if err := s.transport.doPost(ctx, "/api/v3/webhook/list/", nil, &resp); err != nil {
+	if err := s.transport.doGet(ctx, "/api/v3/subscriptions/listWebhookSubscriptions/", map[string]string{"apiKey": s.transport.apiKey}, &resp); err != nil {
 		return nil, err
 	}
 
@@ -56,9 +54,10 @@ func (s *WebhookService) Add(ctx context.Context, query string) (*Webhook, error
 	req := webhookAddRequest{
 		Query: query,
 	}
+	req.APIKey = s.transport.apiKey
 
 	var webhook Webhook
-	if err := s.transport.doPost(ctx, "/api/v3/webhook/add/", req, &webhook); err != nil {
+	if err := s.transport.doPost(ctx, "/api/v3/subscriptions/addWebhookSubscription/", req, &webhook); err != nil {
 		return nil, err
 	}
 
@@ -73,10 +72,11 @@ func (s *WebhookService) Enable(ctx context.Context, id string, active bool) err
 
 	req := webhookEnableRequest{
 		ID:     id,
-		Active: active,
+		Active: strconv.FormatBool(active),
+		APIKey: s.transport.apiKey,
 	}
 
-	return s.transport.doPost(ctx, "/api/v3/webhook/enable/", req, nil)
+	return s.transport.doPost(ctx, "/api/v3/subscriptions/editWebhookSubscription/", req, nil)
 }
 
 // Delete removes a webhook.
@@ -86,10 +86,11 @@ func (s *WebhookService) Delete(ctx context.Context, id string) error {
 	}
 
 	req := webhookDeleteRequest{
-		ID: id,
+		ID:     id,
+		APIKey: s.transport.apiKey,
 	}
 
-	return s.transport.doPost(ctx, "/api/v3/webhook/delete/", req, nil)
+	return s.transport.doPost(ctx, "/api/v3/subscriptions/removeWebhookSubscription/", req, nil)
 }
 
 // Read retrieves data from a webhook.
@@ -99,13 +100,14 @@ func (s *WebhookService) Read(ctx context.Context, id string, newestOnly bool) (
 		return nil, err
 	}
 
-	req := webhookReadRequest{
-		ID:         id,
-		NewestOnly: newestOnly,
+	params := map[string]string{
+		"subscriptionid": id,
+		"newest_only":    strconv.FormatBool(newestOnly),
+		"apiKey":         s.transport.apiKey,
 	}
 
 	var data WebhookData
-	if err := s.transport.doPost(ctx, "/api/v3/webhook/read/", req, &data); err != nil {
+	if err := s.transport.doGet(ctx, "/api/v3/subscriptions/webhook", params, &data); err != nil {
 		return nil, err
 	}
 

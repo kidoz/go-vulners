@@ -74,7 +74,7 @@ import (
 const (
 	defaultBaseURL   = "https://vulners.com"
 	defaultTimeout   = 30 * time.Second
-	defaultUserAgent = "go-vulners-vscanner/1.1.3"
+	defaultUserAgent = "go-vulners-vscanner/1.3.0"
 
 	// Default rate limit values
 	defaultRateLimit = 5.0
@@ -321,12 +321,12 @@ func (c *Client) Result() *ResultService {
 	return c.result
 }
 
-// License represents a VScanner license.
+// License represents a VScanner license. The API returns id, type, and
+// expiration for each license under /api/v3/useraction/licenseids.
 type License struct {
 	ID         string `json:"id,omitempty"`
 	Type       string `json:"type,omitempty"`
 	ValidUntil *Time  `json:"expiration,omitempty"`
-	Hosts      int    `json:"hosts,omitempty"`
 }
 
 type licenseListResponse struct {
@@ -350,6 +350,13 @@ func (c *Client) GetLicenses(ctx context.Context) ([]License, error) {
 		return nil, err
 	}
 	return resp.Licenses, nil
+}
+
+// GetScreenshot fetches a raw screenshot image referenced by a result's
+// screens map (see Result.Screens). imageURI is the value stored under the
+// "screen" key for a given port.
+func (c *Client) GetScreenshot(ctx context.Context, imageURI string) ([]byte, error) {
+	return c.doGetRaw(ctx, "/vscanner/screen/"+imageURI, nil)
 }
 
 // do performs an HTTP request with retry logic.
@@ -449,12 +456,23 @@ func (c *Client) handleResponse(resp *http.Response, result interface{}) error {
 	}
 
 	if resp.StatusCode >= 400 {
+		// The VScanner API returns errors either at the top level
+		// (`{"error": "..."}`) or nested inside the envelope
+		// (`{"result":"error","data":{"error":"..."}}`). Check both.
 		var errResp struct {
 			Error string `json:"error"`
+			Data  struct {
+				Error string `json:"error"`
+			} `json:"data"`
 		}
 		message := "request failed"
-		if json.Unmarshal(bodyBytes, &errResp) == nil && errResp.Error != "" {
-			message = errResp.Error
+		if json.Unmarshal(bodyBytes, &errResp) == nil {
+			switch {
+			case errResp.Error != "":
+				message = errResp.Error
+			case errResp.Data.Error != "":
+				message = errResp.Data.Error
+			}
 		}
 		apiErr := &APIError{StatusCode: resp.StatusCode, Message: message}
 
@@ -479,8 +497,15 @@ func (c *Client) handleResponse(resp *http.Response, result interface{}) error {
 	}
 
 	if apiResp.Result != "OK" && apiResp.Result != "" {
-		if apiResp.Error != "" {
+		var nested struct {
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal(apiResp.Data, &nested)
+		switch {
+		case apiResp.Error != "":
 			return fmt.Errorf("vscanner: API error: %s", apiResp.Error)
+		case nested.Error != "":
+			return fmt.Errorf("vscanner: API error: %s", nested.Error)
 		}
 		return fmt.Errorf("vscanner: request failed with result: %s", apiResp.Result)
 	}
@@ -629,6 +654,10 @@ func (c *Client) doPost(ctx context.Context, path string, body, result interface
 
 func (c *Client) doPut(ctx context.Context, path string, body, result interface{}) error {
 	return c.do(ctx, http.MethodPut, path, body, result)
+}
+
+func (c *Client) doDelete(ctx context.Context, path string, result interface{}) error {
+	return c.do(ctx, http.MethodDelete, path, nil, result)
 }
 
 // doGetRaw performs a GET request and returns raw bytes (for binary responses like PDF/CSV exports).

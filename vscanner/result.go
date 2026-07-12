@@ -3,254 +3,155 @@ package vscanner
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strconv"
 )
 
-// ResultService provides methods for managing VScanner results.
+// ResultService provides methods for accessing VScanner scan results.
 type ResultService struct {
 	client *Client
 }
 
-// Result represents a VScanner scan result.
+// Result represents a VScanner scan result. Screens maps a port (as a string)
+// to per-port screenshot metadata; use Client.GetScreenshot with the "screen"
+// URI to fetch the image bytes.
 type Result struct {
-	ID         string      `json:"id,omitempty"`
-	ProjectID  string      `json:"projectId,omitempty"`
-	TaskID     string      `json:"taskId,omitempty"`
-	TaskName   string      `json:"taskName,omitempty"`
-	Status     string      `json:"status,omitempty"`
-	StartedAt  *Time       `json:"startedAt,omitempty"`
-	FinishedAt *Time       `json:"finishedAt,omitempty"`
-	HostCount  int         `json:"hostCount,omitempty"`
-	VulnCount  int         `json:"vulnCount,omitempty"`
-	Statistics *Statistics `json:"statistics,omitempty"`
+	ID        string                  `json:"_id,omitempty"`
+	ProjectID string                  `json:"project_id,omitempty"`
+	Screens   map[string]ResultScreen `json:"screens,omitempty"`
 }
 
-// Statistics represents scan result statistics.
-type Statistics struct {
-	TotalHosts   int            `json:"totalHosts,omitempty"`
-	ScannedHosts int            `json:"scannedHosts,omitempty"`
-	TotalVulns   int            `json:"totalVulns,omitempty"`
-	BySeverity   map[string]int `json:"bySeverity,omitempty"`
-	ByType       map[string]int `json:"byType,omitempty"`
-	TopVulns     []VulnSummary  `json:"topVulns,omitempty"`
-	TopHosts     []HostSummary  `json:"topHosts,omitempty"`
+// ResultScreen holds per-port screenshot metadata.
+type ResultScreen struct {
+	Screen string `json:"screen,omitempty"`
 }
 
-// VulnSummary represents a vulnerability summary.
-type VulnSummary struct {
-	ID        string   `json:"id,omitempty"`
-	Title     string   `json:"title,omitempty"`
-	Severity  string   `json:"severity,omitempty"`
-	CVSS      float64  `json:"cvss,omitempty"`
-	CVEList   []string `json:"cvelist,omitempty"`
-	HostCount int      `json:"hostCount,omitempty"`
+// ResultOption is a functional option for filtering scan results.
+type ResultOption func(*resultConfig)
+
+type resultConfig struct {
+	search  string
+	inPorts []string
+	exPorts []string
+	minCVSS *float64
+	maxCVSS *float64
+	sort    string
+	sortDir string
+	offset  int
+	limit   int
 }
 
-// HostSummary represents a host summary.
-type HostSummary struct {
-	Host      string `json:"host,omitempty"`
-	IP        string `json:"ip,omitempty"`
-	Hostname  string `json:"hostname,omitempty"`
-	OS        string `json:"os,omitempty"`
-	VulnCount int    `json:"vulnCount,omitempty"`
-	Critical  int    `json:"critical,omitempty"`
-	High      int    `json:"high,omitempty"`
-	Medium    int    `json:"medium,omitempty"`
-	Low       int    `json:"low,omitempty"`
+// WithResultSearch filters results by ip, network, name, or vuln_id.
+func WithResultSearch(query string) ResultOption {
+	return func(c *resultConfig) { c.search = query }
 }
 
-// HostDetail represents detailed host information.
-type HostDetail struct {
-	Host            string         `json:"host,omitempty"`
-	IP              string         `json:"ip,omitempty"`
-	Hostname        string         `json:"hostname,omitempty"`
-	OS              string         `json:"os,omitempty"`
-	Ports           []PortInfo     `json:"ports,omitempty"`
-	Vulnerabilities []HostVulnInfo `json:"vulnerabilities,omitempty"`
+// WithResultIncludePorts restricts results to the given ports.
+func WithResultIncludePorts(ports ...string) ResultOption {
+	return func(c *resultConfig) { c.inPorts = ports }
 }
 
-// PortInfo represents port information.
-type PortInfo struct {
-	Port     int    `json:"port,omitempty"`
-	Protocol string `json:"protocol,omitempty"`
-	State    string `json:"state,omitempty"`
-	Service  string `json:"service,omitempty"`
-	Version  string `json:"version,omitempty"`
+// WithResultExcludePorts excludes the given ports from results.
+func WithResultExcludePorts(ports ...string) ResultOption {
+	return func(c *resultConfig) { c.exPorts = ports }
 }
 
-// HostVulnInfo represents vulnerability information for a host.
-type HostVulnInfo struct {
-	ID       string   `json:"id,omitempty"`
-	Title    string   `json:"title,omitempty"`
-	Severity string   `json:"severity,omitempty"`
-	CVSS     float64  `json:"cvss,omitempty"`
-	CVEList  []string `json:"cvelist,omitempty"`
-	Port     int      `json:"port,omitempty"`
-	Protocol string   `json:"protocol,omitempty"`
-	Evidence string   `json:"evidence,omitempty"`
-}
-
-// resultListResponse represents the result list response.
-type resultListResponse struct {
-	Results []Result `json:"results"`
-	Total   int      `json:"total,omitempty"`
-}
-
-// List returns all results for a project.
-func (s *ResultService) List(ctx context.Context, projectID string, opts ...ListOption) ([]Result, error) {
-	cfg := &listConfig{
-		limit: 100,
+// WithResultCVSSRange filters results by CVSS score range. Use a negative
+// bound to leave it unset.
+func WithResultCVSSRange(minCVSS, maxCVSS float64) ResultOption {
+	return func(c *resultConfig) {
+		if minCVSS >= 0 {
+			c.minCVSS = &minCVSS
+		}
+		if maxCVSS >= 0 {
+			c.maxCVSS = &maxCVSS
+		}
 	}
+}
 
+// WithResultSort sets the sort field and direction. field must be one of
+// ip, name, last_seen, first_seen, resolved, min_cvss, or max_cvss.
+func WithResultSort(field string, ascending bool) ResultOption {
+	return func(c *resultConfig) {
+		c.sort = field
+		if ascending {
+			c.sortDir = "asc"
+		} else {
+			c.sortDir = "desc"
+		}
+	}
+}
+
+// WithResultLimit sets the maximum number of results to return (max 1000).
+func WithResultLimit(limit int) ResultOption {
+	return func(c *resultConfig) { c.limit = limit }
+}
+
+// WithResultOffset sets the pagination offset.
+func WithResultOffset(offset int) ResultOption {
+	return func(c *resultConfig) { c.offset = offset }
+}
+
+func (c *resultConfig) values() url.Values {
+	values := url.Values{}
+	if c.search != "" {
+		values.Set("search", c.search)
+	}
+	for _, p := range c.inPorts {
+		values.Add("in_port", p)
+	}
+	for _, p := range c.exPorts {
+		values.Add("ex_port", p)
+	}
+	if c.minCVSS != nil {
+		values.Set("min_cvss", strconv.FormatFloat(*c.minCVSS, 'f', -1, 64))
+	}
+	if c.maxCVSS != nil {
+		values.Set("max_cvss", strconv.FormatFloat(*c.maxCVSS, 'f', -1, 64))
+	}
+	if c.sort != "" {
+		values.Set("sort", c.sort)
+	}
+	if c.sortDir != "" {
+		values.Set("sort_dir", c.sortDir)
+	}
+	if c.offset > 0 {
+		values.Set("offset", strconv.Itoa(c.offset))
+	}
+	if c.limit > 0 {
+		values.Set("limit", strconv.Itoa(c.limit))
+	}
+	return values
+}
+
+func resultsPath(projectID string) string {
+	return projectsBasePath + url.PathEscape(projectID) + "/results"
+}
+
+// List returns scan results for a project.
+func (s *ResultService) List(ctx context.Context, projectID string, opts ...ResultOption) ([]Result, error) {
+	cfg := &resultConfig{limit: 50}
 	for _, opt := range opts {
 		opt(cfg)
 	}
 
-	params := map[string]string{
-		"projectId": projectID,
-	}
-	if cfg.limit > 0 {
-		params["limit"] = fmt.Sprintf("%d", cfg.limit)
-	}
-	if cfg.offset > 0 {
-		params["offset"] = fmt.Sprintf("%d", cfg.offset)
-	}
-	if cfg.sort != "" {
-		params["sort"] = cfg.sort
-	}
-	if cfg.order != "" {
-		params["order"] = cfg.order
+	path := resultsPath(projectID)
+	if values := cfg.values(); len(values) > 0 {
+		path += "?" + values.Encode()
 	}
 
-	var resp resultListResponse
-	if err := s.client.doGet(ctx, "/api/v3/vscanner/results", params, &resp); err != nil {
+	var results []Result
+	if err := s.client.doGet(ctx, path, nil, &results); err != nil {
 		return nil, err
 	}
-
-	return resp.Results, nil
+	return results, nil
 }
 
-// Get retrieves a result by ID.
-func (s *ResultService) Get(ctx context.Context, projectID, resultID string) (*Result, error) {
-	params := map[string]string{
-		"projectId": projectID,
-		"resultId":  resultID,
-	}
-
-	var result Result
-	if err := s.client.doGet(ctx, "/api/v3/vscanner/result", params, &result); err != nil {
-		return nil, err
-	}
-
-	return &result, nil
-}
-
-// GetStatistics retrieves statistics for a result.
-func (s *ResultService) GetStatistics(ctx context.Context, projectID, resultID string) (*Statistics, error) {
-	params := map[string]string{
-		"projectId": projectID,
-		"resultId":  resultID,
-	}
-
-	var stats Statistics
-	if err := s.client.doGet(ctx, "/api/v3/vscanner/result/statistics", params, &stats); err != nil {
-		return nil, err
-	}
-
-	return &stats, nil
-}
-
-// GetHosts retrieves hosts from a result.
-func (s *ResultService) GetHosts(ctx context.Context, projectID, resultID string, opts ...ListOption) ([]HostSummary, error) {
-	cfg := &listConfig{
-		limit: 100,
-	}
-
-	for _, opt := range opts {
-		opt(cfg)
-	}
-
-	params := map[string]string{
-		"projectId": projectID,
-		"resultId":  resultID,
-	}
-	if cfg.limit > 0 {
-		params["limit"] = fmt.Sprintf("%d", cfg.limit)
-	}
-	if cfg.offset > 0 {
-		params["offset"] = fmt.Sprintf("%d", cfg.offset)
-	}
-
-	var hosts []HostSummary
-	if err := s.client.doGet(ctx, "/api/v3/vscanner/result/hosts", params, &hosts); err != nil {
-		return nil, err
-	}
-
-	return hosts, nil
-}
-
-// GetHostDetail retrieves detailed information for a specific host.
-func (s *ResultService) GetHostDetail(ctx context.Context, projectID, resultID, host string) (*HostDetail, error) {
-	params := map[string]string{
-		"projectId": projectID,
-		"resultId":  resultID,
-		"host":      host,
-	}
-
-	var detail HostDetail
-	if err := s.client.doGet(ctx, "/api/v3/vscanner/result/host", params, &detail); err != nil {
-		return nil, err
-	}
-
-	return &detail, nil
-}
-
-// GetVulnerabilities retrieves vulnerabilities from a result.
-func (s *ResultService) GetVulnerabilities(ctx context.Context, projectID, resultID string, opts ...ListOption) ([]VulnSummary, error) {
-	cfg := &listConfig{
-		limit: 100,
-	}
-
-	for _, opt := range opts {
-		opt(cfg)
-	}
-
-	params := map[string]string{
-		"projectId": projectID,
-		"resultId":  resultID,
-	}
-	if cfg.limit > 0 {
-		params["limit"] = fmt.Sprintf("%d", cfg.limit)
-	}
-	if cfg.offset > 0 {
-		params["offset"] = fmt.Sprintf("%d", cfg.offset)
-	}
-
-	var vulns []VulnSummary
-	if err := s.client.doGet(ctx, "/api/v3/vscanner/result/vulnerabilities", params, &vulns); err != nil {
-		return nil, err
-	}
-
-	return vulns, nil
-}
-
-// Delete removes a result.
+// Delete removes a scan result.
 func (s *ResultService) Delete(ctx context.Context, projectID, resultID string) error {
-	req := map[string]string{
-		"projectId": projectID,
-		"resultId":  resultID,
+	if resultID == "" {
+		return fmt.Errorf("vscanner: result ID is required")
 	}
-
-	return s.client.doPost(ctx, "/api/v3/vscanner/result/delete", req, nil)
-}
-
-// Export exports a result in the specified format.
-// Supported formats: pdf, csv, json, xml
-func (s *ResultService) Export(ctx context.Context, projectID, resultID, format string) ([]byte, error) {
-	params := map[string]string{
-		"projectId": projectID,
-		"resultId":  resultID,
-		"format":    format,
-	}
-
-	return s.client.doGetRaw(ctx, "/api/v3/vscanner/result/export", params)
+	path := resultsPath(projectID) + "/" + url.PathEscape(resultID)
+	return s.client.doDelete(ctx, path, nil)
 }

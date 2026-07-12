@@ -3,8 +3,11 @@ package vscanner
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 )
@@ -16,16 +19,8 @@ func TestNewClient(t *testing.T) {
 		opts    []Option
 		wantErr bool
 	}{
-		{
-			name:    "valid API key",
-			apiKey:  "test-api-key",
-			wantErr: false,
-		},
-		{
-			name:    "empty API key",
-			apiKey:  "",
-			wantErr: true,
-		},
+		{name: "valid API key", apiKey: "test-api-key", wantErr: false},
+		{name: "empty API key", apiKey: "", wantErr: true},
 		{
 			name:   "with options",
 			apiKey: "test-api-key",
@@ -37,11 +32,9 @@ func TestNewClient(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:   "HTTP URL rejected without AllowInsecure",
-			apiKey: "test-api-key",
-			opts: []Option{
-				WithBaseURL("http://vulners.example.com"),
-			},
+			name:    "HTTP URL rejected without AllowInsecure",
+			apiKey:  "test-api-key",
+			opts:    []Option{WithBaseURL("http://vulners.example.com")},
 			wantErr: true,
 		},
 		{
@@ -54,27 +47,21 @@ func TestNewClient(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:   "localhost HTTP allowed without AllowInsecure",
-			apiKey: "test-api-key",
-			opts: []Option{
-				WithBaseURL("http://localhost:8080"),
-			},
+			name:    "localhost HTTP allowed without AllowInsecure",
+			apiKey:  "test-api-key",
+			opts:    []Option{WithBaseURL("http://localhost:8080")},
 			wantErr: false,
 		},
 		{
-			name:   "with custom rate limit",
-			apiKey: "test-api-key",
-			opts: []Option{
-				WithRateLimit(10.0, 20),
-			},
+			name:    "with custom rate limit",
+			apiKey:  "test-api-key",
+			opts:    []Option{WithRateLimit(10.0, 20)},
 			wantErr: false,
 		},
 		{
-			name:   "with proxy URL",
-			apiKey: "test-api-key",
-			opts: []Option{
-				WithProxy("http://proxy.example.com:8080"),
-			},
+			name:    "with proxy URL",
+			apiKey:  "test-api-key",
+			opts:    []Option{WithProxy("http://proxy.example.com:8080")},
 			wantErr: false,
 		},
 	}
@@ -93,15 +80,30 @@ func TestNewClient(t *testing.T) {
 	}
 }
 
-// Helper to create a test client with a mock server
+// capturedRequest records what the mock server received.
+type capturedRequest struct {
+	method string
+	path   string
+	query  url.Values
+	body   map[string]interface{}
+}
+
+// apiResponse is the common envelope for API responses.
+type apiResponse struct {
+	Result string          `json:"result"`
+	Data   json.RawMessage `json:"data,omitempty"`
+}
+
+// newTestClient creates a client wired to a mock server.
 func newTestClient(t *testing.T, handler http.HandlerFunc) *Client {
+	t.Helper()
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 
 	client, err := NewClient("test-key",
 		WithBaseURL(server.URL),
 		WithAllowInsecure(),
-		WithRateLimit(100, 100),
+		WithRateLimit(1000, 1000),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -109,24 +111,24 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) *Client {
 	return client
 }
 
-// apiResponse is the common wrapper for API responses
-type apiResponse struct {
-	Result string          `json:"result"`
-	Data   json.RawMessage `json:"data,omitempty"`
-}
-
-// Helper to create a JSON response handler
-func jsonHandler(t *testing.T, data interface{}) http.HandlerFunc {
+// recordingHandler captures the request and returns data wrapped in the API
+// envelope ({"result":"OK","data":...}).
+func recordingHandler(t *testing.T, captured *capturedRequest, data interface{}) http.HandlerFunc {
+	t.Helper()
 	return func(w http.ResponseWriter, r *http.Request) {
-		resp := apiResponse{
-			Result: "OK",
+		captured.method = r.Method
+		captured.path = r.URL.Path
+		captured.query = r.URL.Query()
+		if b, _ := io.ReadAll(r.Body); len(b) > 0 {
+			_ = json.Unmarshal(b, &captured.body)
 		}
+		resp := apiResponse{Result: "OK"}
 		if data != nil {
-			dataBytes, err := json.Marshal(data)
+			db, err := json.Marshal(data)
 			if err != nil {
 				t.Fatal(err)
 			}
-			resp.Data = dataBytes
+			resp.Data = db
 		}
 		if err := json.NewEncoder(w).Encode(resp); err != nil {
 			t.Fatal(err)
@@ -134,29 +136,36 @@ func jsonHandler(t *testing.T, data interface{}) http.HandlerFunc {
 	}
 }
 
-func TestClient_GetLicenses(t *testing.T) {
-	data := []License{
-		{ID: "license-1", Type: "professional", Hosts: 100},
-		{ID: "license-2", Type: "enterprise", Hosts: 1000},
+func assertReq(t *testing.T, c *capturedRequest, method, path string) {
+	t.Helper()
+	if c.method != method {
+		t.Errorf("method = %s, want %s", c.method, method)
 	}
+	if c.path != path {
+		t.Errorf("path = %s, want %s", c.path, path)
+	}
+}
 
-	client := newTestClient(t, jsonHandler(t, data))
+func TestClient_GetLicenses(t *testing.T) {
+	var cap capturedRequest
+	data := map[string]interface{}{
+		"licenseList": []License{
+			{ID: "license-1", Type: "professional"},
+			{ID: "license-2", Type: "enterprise"},
+		},
+	}
+	client := newTestClient(t, recordingHandler(t, &cap, data))
 
 	licenses, err := client.GetLicenses(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-
+	assertReq(t, &cap, http.MethodGet, "/api/v3/useraction/licenseids")
 	if len(licenses) != 2 {
-		t.Errorf("expected 2 licenses, got %d", len(licenses))
+		t.Fatalf("expected 2 licenses, got %d", len(licenses))
 	}
-
-	if licenses[0].ID != "license-1" {
-		t.Errorf("expected ID=license-1, got %s", licenses[0].ID)
-	}
-
-	if licenses[0].Hosts != 100 {
-		t.Errorf("expected Hosts=100, got %d", licenses[0].Hosts)
+	if licenses[0].ID != "license-1" || licenses[1].Type != "enterprise" {
+		t.Errorf("unexpected licenses: %+v", licenses)
 	}
 }
 
@@ -165,357 +174,271 @@ func TestClient_Services(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// Test that services are initialized correctly
-	project := client.Project()
-	if project == nil {
-		t.Error("Project() returned nil")
+	if client.Project() == nil || client.Task() == nil || client.Result() == nil {
+		t.Fatal("a service returned nil")
 	}
-
-	// Call again to verify sync.Once behavior
-	project2 := client.Project()
-	if project != project2 {
+	// Verify sync.Once caching returns the same instance.
+	if p1, p2 := client.Project(), client.Project(); p1 != p2 {
 		t.Error("Project() returned different instances")
-	}
-
-	task := client.Task()
-	if task == nil {
-		t.Error("Task() returned nil")
-	}
-
-	result := client.Result()
-	if result == nil {
-		t.Error("Result() returned nil")
 	}
 }
 
 func TestProjectService_List(t *testing.T) {
-	data := map[string]interface{}{
-		"projects": []Project{
-			{ID: "proj-1", Name: "Project 1"},
-			{ID: "proj-2", Name: "Project 2"},
-		},
-		"total": 2,
+	var cap capturedRequest
+	// The API returns a bare array of projects under "data".
+	data := []Project{
+		{ID: "proj-1", Name: "Project 1", LicenseID: "lic-1"},
+		{ID: "proj-2", Name: "Project 2"},
 	}
+	client := newTestClient(t, recordingHandler(t, &cap, data))
 
-	client := newTestClient(t, jsonHandler(t, data))
-
-	projects, err := client.Project().List(context.Background())
+	projects, err := client.Project().List(context.Background(), WithListLimit(10), WithListOffset(5))
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	if len(projects) != 2 {
-		t.Errorf("expected 2 projects, got %d", len(projects))
+	assertReq(t, &cap, http.MethodGet, "/api/v3/proxy/vscanner/v2/projects/")
+	if cap.query.Get("limit") != "10" || cap.query.Get("offset") != "5" {
+		t.Errorf("unexpected query: %v", cap.query)
 	}
-
-	if projects[0].ID != "proj-1" {
-		t.Errorf("expected ID=proj-1, got %s", projects[0].ID)
-	}
-}
-
-func TestProjectService_Get(t *testing.T) {
-	data := Project{
-		ID:          "proj-1",
-		Name:        "Test Project",
-		Description: "A test project",
-		TaskCount:   5,
-		HostCount:   100,
-		VulnCount:   50,
-	}
-
-	client := newTestClient(t, jsonHandler(t, data))
-
-	project, err := client.Project().Get(context.Background(), "proj-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if project.ID != "proj-1" {
-		t.Errorf("expected ID=proj-1, got %s", project.ID)
-	}
-
-	if project.TaskCount != 5 {
-		t.Errorf("expected TaskCount=5, got %d", project.TaskCount)
+	if len(projects) != 2 || projects[0].ID != "proj-1" {
+		t.Errorf("unexpected projects: %+v", projects)
 	}
 }
 
 func TestProjectService_Create(t *testing.T) {
-	data := Project{
-		ID:   "new-proj",
-		Name: "New Project",
+	var cap capturedRequest
+	client := newTestClient(t, recordingHandler(t, &cap, Project{ID: "new-proj", Name: "New Project"}))
+
+	req := &ProjectRequest{
+		Name:         "New Project",
+		LicenseID:    "lic-1",
+		Notification: DisabledNotification(),
 	}
-
-	client := newTestClient(t, jsonHandler(t, data))
-
-	req := &ProjectRequest{Name: "New Project", Description: "A new project"}
 	project, err := client.Project().Create(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
-
+	assertReq(t, &cap, http.MethodPost, "/api/v3/proxy/vscanner/v2/projects/")
+	if cap.body["name"] != "New Project" || cap.body["license_id"] != "lic-1" {
+		t.Errorf("unexpected body: %v", cap.body)
+	}
+	if _, ok := cap.body["notification"]; !ok {
+		t.Errorf("notification missing from body: %v", cap.body)
+	}
 	if project.ID != "new-proj" {
 		t.Errorf("expected ID=new-proj, got %s", project.ID)
 	}
 }
 
 func TestProjectService_CreateNilRequest(t *testing.T) {
-	client := newTestClient(t, jsonHandler(t, nil))
-
-	_, err := client.Project().Create(context.Background(), nil)
-	if err == nil {
+	client := newTestClient(t, recordingHandler(t, &capturedRequest{}, nil))
+	if _, err := client.Project().Create(context.Background(), nil); err == nil {
 		t.Error("expected error for nil request")
 	}
 }
 
 func TestProjectService_Update(t *testing.T) {
-	data := Project{
-		ID:   "proj-1",
-		Name: "Updated Project",
-	}
+	var cap capturedRequest
+	client := newTestClient(t, recordingHandler(t, &cap, Project{ID: "proj-1", Name: "Updated"}))
 
-	client := newTestClient(t, jsonHandler(t, data))
-
-	req := &ProjectRequest{Name: "Updated Project"}
+	req := &ProjectRequest{Name: "Updated", LicenseID: "lic-1", Notification: DisabledNotification()}
 	project, err := client.Project().Update(context.Background(), "proj-1", req)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	if project.Name != "Updated Project" {
-		t.Errorf("expected Name='Updated Project', got %s", project.Name)
+	assertReq(t, &cap, http.MethodPut, "/api/v3/proxy/vscanner/v2/projects/proj-1")
+	if project.Name != "Updated" {
+		t.Errorf("expected Name=Updated, got %s", project.Name)
 	}
 }
 
 func TestProjectService_Delete(t *testing.T) {
-	client := newTestClient(t, jsonHandler(t, nil))
+	var cap capturedRequest
+	client := newTestClient(t, recordingHandler(t, &cap, nil))
 
-	err := client.Project().Delete(context.Background(), "proj-1")
+	if err := client.Project().Delete(context.Background(), "proj-1"); err != nil {
+		t.Fatal(err)
+	}
+	assertReq(t, &cap, http.MethodDelete, "/api/v3/proxy/vscanner/v2/projects/proj-1")
+}
+
+func TestProjectService_GetStatistics(t *testing.T) {
+	var cap capturedRequest
+	data := map[string]interface{}{"total_hosts": 42}
+	client := newTestClient(t, recordingHandler(t, &cap, data))
+
+	stats, err := client.Project().GetStatistics(context.Background(), "proj-1", StatTotalHosts, StatUniqueCVE)
 	if err != nil {
 		t.Fatal(err)
+	}
+	assertReq(t, &cap, http.MethodGet, "/api/v3/proxy/vscanner/v2/projects/proj-1/statistic")
+	if got := cap.query["stat"]; len(got) != 2 || got[0] != "total_hosts" || got[1] != "unique_cve" {
+		t.Errorf("unexpected stat query: %v", got)
+	}
+	if string(stats["total_hosts"]) != "42" {
+		t.Errorf("expected total_hosts=42, got %s", stats["total_hosts"])
+	}
+}
+
+func TestProjectService_GetStatisticsNoStats(t *testing.T) {
+	client := newTestClient(t, recordingHandler(t, &capturedRequest{}, nil))
+	if _, err := client.Project().GetStatistics(context.Background(), "proj-1"); err == nil {
+		t.Error("expected error when no stats requested")
 	}
 }
 
 func TestTaskService_List(t *testing.T) {
-	data := map[string]interface{}{
-		"tasks": []Task{
-			{ID: "task-1", Name: "Task 1", Status: "completed"},
-			{ID: "task-2", Name: "Task 2", Status: "pending"},
-		},
-		"total": 2,
+	var cap capturedRequest
+	data := []Task{
+		{ID: "task-1", Name: "Task 1", Enabled: true},
+		{ID: "task-2", Name: "Task 2"},
 	}
-
-	client := newTestClient(t, jsonHandler(t, data))
+	client := newTestClient(t, recordingHandler(t, &cap, data))
 
 	tasks, err := client.Task().List(context.Background(), "proj-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	if len(tasks) != 2 {
-		t.Errorf("expected 2 tasks, got %d", len(tasks))
-	}
-
-	if tasks[0].Status != "completed" {
-		t.Errorf("expected Status=completed, got %s", tasks[0].Status)
-	}
-}
-
-func TestTaskService_Get(t *testing.T) {
-	data := Task{
-		ID:          "task-1",
-		ProjectID:   "proj-1",
-		Name:        "Test Task",
-		Status:      "running",
-		Description: "A test task",
-	}
-
-	client := newTestClient(t, jsonHandler(t, data))
-
-	task, err := client.Task().Get(context.Background(), "proj-1", "task-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if task.Status != "running" {
-		t.Errorf("expected Status=running, got %s", task.Status)
+	assertReq(t, &cap, http.MethodGet, "/api/v3/proxy/vscanner/v2/projects/proj-1/tasks")
+	if len(tasks) != 2 || tasks[0].Name != "Task 1" {
+		t.Errorf("unexpected tasks: %+v", tasks)
 	}
 }
 
 func TestTaskService_Create(t *testing.T) {
-	data := Task{
-		ID:   "new-task",
-		Name: "New Task",
+	var cap capturedRequest
+	client := newTestClient(t, recordingHandler(t, &cap, Task{ID: "new-task", Name: "New Task"}))
+
+	req := &TaskRequest{
+		Name:     "New Task",
+		Networks: []string{"192.168.1.0/24"},
+		Ports:    []string{"80", "443"},
+		Schedule: "0 0 * * *",
+		Timing:   "normal",
+		Enabled:  true,
 	}
-
-	client := newTestClient(t, jsonHandler(t, data))
-
-	req := &TaskRequest{Name: "New Task", Targets: []string{"192.168.1.0/24"}}
 	task, err := client.Task().Create(context.Background(), "proj-1", req)
 	if err != nil {
 		t.Fatal(err)
 	}
-
+	assertReq(t, &cap, http.MethodPost, "/api/v3/proxy/vscanner/v2/projects/proj-1/tasks")
+	if cap.body["name"] != "New Task" || cap.body["schedule"] != "0 0 * * *" {
+		t.Errorf("unexpected body: %v", cap.body)
+	}
 	if task.ID != "new-task" {
 		t.Errorf("expected ID=new-task, got %s", task.ID)
 	}
 }
 
-func TestTaskService_Start(t *testing.T) {
-	client := newTestClient(t, jsonHandler(t, nil))
+func TestTaskService_Update(t *testing.T) {
+	var cap capturedRequest
+	client := newTestClient(t, recordingHandler(t, &cap, Task{ID: "task-1", Name: "Updated Task"}))
 
-	err := client.Task().Start(context.Background(), "proj-1", "task-1")
+	req := &TaskRequest{Name: "Updated Task", Networks: []string{"10.0.0.0/8"}, Ports: []string{"22"}}
+	task, err := client.Task().Update(context.Background(), "proj-1", "task-1", req)
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertReq(t, &cap, http.MethodPut, "/api/v3/proxy/vscanner/v2/projects/proj-1/tasks/task-1")
+	if task.Name != "Updated Task" {
+		t.Errorf("expected Name=Updated Task, got %s", task.Name)
+	}
 }
 
-func TestTaskService_Stop(t *testing.T) {
-	client := newTestClient(t, jsonHandler(t, nil))
+func TestTaskService_Start(t *testing.T) {
+	var cap capturedRequest
+	client := newTestClient(t, recordingHandler(t, &cap, Task{ID: "task-1", Enabled: true}))
 
-	err := client.Task().Stop(context.Background(), "proj-1", "task-1")
+	task, err := client.Task().Start(context.Background(), "proj-1", "task-1")
 	if err != nil {
 		t.Fatal(err)
+	}
+	assertReq(t, &cap, http.MethodPost, "/api/v3/proxy/vscanner/v2/projects/proj-1/tasks/task-1/start")
+	if task.ID != "task-1" {
+		t.Errorf("expected ID=task-1, got %s", task.ID)
 	}
 }
 
 func TestTaskService_Delete(t *testing.T) {
-	client := newTestClient(t, jsonHandler(t, nil))
+	var cap capturedRequest
+	client := newTestClient(t, recordingHandler(t, &cap, nil))
 
-	err := client.Task().Delete(context.Background(), "proj-1", "task-1")
-	if err != nil {
+	if err := client.Task().Delete(context.Background(), "proj-1", "task-1"); err != nil {
 		t.Fatal(err)
 	}
+	assertReq(t, &cap, http.MethodDelete, "/api/v3/proxy/vscanner/v2/projects/proj-1/tasks/task-1")
 }
 
 func TestResultService_List(t *testing.T) {
-	data := map[string]interface{}{
-		"results": []Result{
-			{ID: "result-1", TaskName: "Scan 1", Status: "completed"},
-		},
-		"total": 1,
+	var cap capturedRequest
+	data := []Result{
+		{ID: "result-1", ProjectID: "proj-1"},
+		{ID: "result-2", ProjectID: "proj-1", Screens: map[string]ResultScreen{"443": {Screen: "abc"}}},
 	}
+	client := newTestClient(t, recordingHandler(t, &cap, data))
 
-	client := newTestClient(t, jsonHandler(t, data))
-
-	results, err := client.Result().List(context.Background(), "proj-1")
+	results, err := client.Result().List(context.Background(), "proj-1",
+		WithResultSearch("nginx"),
+		WithResultCVSSRange(7.0, 10.0),
+		WithResultSort("max_cvss", false),
+		WithResultLimit(20),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	if len(results) != 1 {
-		t.Errorf("expected 1 result, got %d", len(results))
+	assertReq(t, &cap, http.MethodGet, "/api/v3/proxy/vscanner/v2/projects/proj-1/results")
+	if cap.query.Get("search") != "nginx" || cap.query.Get("min_cvss") != "7" ||
+		cap.query.Get("sort") != "max_cvss" || cap.query.Get("sort_dir") != "desc" ||
+		cap.query.Get("limit") != "20" {
+		t.Errorf("unexpected query: %v", cap.query)
 	}
-
-	if results[0].Status != "completed" {
-		t.Errorf("expected Status=completed, got %s", results[0].Status)
-	}
-}
-
-func TestResultService_Get(t *testing.T) {
-	data := Result{
-		ID:        "result-1",
-		ProjectID: "proj-1",
-		TaskID:    "task-1",
-		Status:    "completed",
-		HostCount: 50,
-		VulnCount: 25,
-	}
-
-	client := newTestClient(t, jsonHandler(t, data))
-
-	result, err := client.Result().Get(context.Background(), "proj-1", "result-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if result.HostCount != 50 {
-		t.Errorf("expected HostCount=50, got %d", result.HostCount)
-	}
-
-	if result.VulnCount != 25 {
-		t.Errorf("expected VulnCount=25, got %d", result.VulnCount)
-	}
-}
-
-func TestResultService_GetStatistics(t *testing.T) {
-	data := Statistics{
-		TotalHosts:   100,
-		ScannedHosts: 95,
-		TotalVulns:   50,
-		BySeverity: map[string]int{
-			"critical": 5,
-			"high":     15,
-			"medium":   20,
-			"low":      10,
-		},
-	}
-
-	client := newTestClient(t, jsonHandler(t, data))
-
-	stats, err := client.Result().GetStatistics(context.Background(), "proj-1", "result-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if stats.TotalHosts != 100 {
-		t.Errorf("expected TotalHosts=100, got %d", stats.TotalHosts)
-	}
-
-	if stats.BySeverity["critical"] != 5 {
-		t.Errorf("expected BySeverity[critical]=5, got %d", stats.BySeverity["critical"])
-	}
-}
-
-func TestResultService_GetHosts(t *testing.T) {
-	data := []HostSummary{
-		{Host: "192.168.1.1", VulnCount: 10, Critical: 2, High: 3},
-		{Host: "192.168.1.2", VulnCount: 5, Critical: 0, High: 2},
-	}
-
-	client := newTestClient(t, jsonHandler(t, data))
-
-	hosts, err := client.Result().GetHosts(context.Background(), "proj-1", "result-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(hosts) != 2 {
-		t.Errorf("expected 2 hosts, got %d", len(hosts))
-	}
-
-	if hosts[0].Critical != 2 {
-		t.Errorf("expected Critical=2, got %d", hosts[0].Critical)
-	}
-}
-
-func TestResultService_GetVulnerabilities(t *testing.T) {
-	data := []VulnSummary{
-		{ID: "vuln-1", Title: "Critical Vuln", Severity: "critical", CVSS: 9.8},
-	}
-
-	client := newTestClient(t, jsonHandler(t, data))
-
-	vulns, err := client.Result().GetVulnerabilities(context.Background(), "proj-1", "result-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(vulns) != 1 {
-		t.Errorf("expected 1 vuln, got %d", len(vulns))
-	}
-
-	if vulns[0].CVSS != 9.8 {
-		t.Errorf("expected CVSS=9.8, got %f", vulns[0].CVSS)
+	if len(results) != 2 || results[1].Screens["443"].Screen != "abc" {
+		t.Errorf("unexpected results: %+v", results)
 	}
 }
 
 func TestResultService_Delete(t *testing.T) {
-	client := newTestClient(t, jsonHandler(t, nil))
+	var cap capturedRequest
+	client := newTestClient(t, recordingHandler(t, &cap, nil))
 
-	err := client.Result().Delete(context.Background(), "proj-1", "result-1")
-	if err != nil {
+	if err := client.Result().Delete(context.Background(), "proj-1", "result-1"); err != nil {
 		t.Fatal(err)
+	}
+	assertReq(t, &cap, http.MethodDelete, "/api/v3/proxy/vscanner/v2/projects/proj-1/results/result-1")
+}
+
+func TestNotificationHelpers(t *testing.T) {
+	d := DisabledNotification()
+	if d.Period != "disabled" || d.Email == nil || d.Slack == nil {
+		t.Errorf("unexpected DisabledNotification: %+v", d)
+	}
+	n := NewNotification("daily", []string{"a@b.c"}, nil)
+	if n.Period != "daily" || len(n.Email) != 1 || n.Slack == nil {
+		t.Errorf("unexpected NewNotification: %+v", n)
+	}
+}
+
+func TestNestedErrorMessage(t *testing.T) {
+	// The API returns errors nested under data.error with an HTTP error status.
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"result":"error","data":{"error":"invalid endpoint"}}`))
+	}
+	client := newTestClient(t, handler)
+
+	_, err := client.Project().List(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *APIError, got %T", err)
+	}
+	if apiErr.StatusCode != 404 {
+		t.Errorf("expected status 404, got %d", apiErr.StatusCode)
+	}
+	if apiErr.Message != "invalid endpoint" {
+		t.Errorf("expected message 'invalid endpoint', got %q", apiErr.Message)
 	}
 }
 
@@ -552,36 +475,12 @@ func TestTime_UnmarshalJSON(t *testing.T) {
 		input   string
 		wantErr bool
 	}{
-		{
-			name:    "RFC3339",
-			input:   `"2021-12-09T12:00:00Z"`,
-			wantErr: false,
-		},
-		{
-			name:    "RFC3339Nano",
-			input:   `"2021-12-09T12:00:00.123456789Z"`,
-			wantErr: false,
-		},
-		{
-			name:    "date only",
-			input:   `"2021-12-09"`,
-			wantErr: false,
-		},
-		{
-			name:    "null",
-			input:   `null`,
-			wantErr: false,
-		},
-		{
-			name:    "timestamp milliseconds",
-			input:   `1639051200000`,
-			wantErr: false,
-		},
-		{
-			name:    "datetime without timezone",
-			input:   `"2021-12-09T12:00:00"`,
-			wantErr: false,
-		},
+		{"RFC3339", `"2021-12-09T12:00:00Z"`, false},
+		{"RFC3339Nano", `"2021-12-09T12:00:00.123456789Z"`, false},
+		{"date only", `"2021-12-09"`, false},
+		{"null", `null`, false},
+		{"timestamp milliseconds", `1639051200000`, false},
+		{"datetime without timezone", `"2021-12-09T12:00:00"`, false},
 	}
 
 	for _, tt := range tests {
@@ -601,16 +500,8 @@ func TestTime_MarshalJSON(t *testing.T) {
 		time Time
 		want string
 	}{
-		{
-			name: "zero time",
-			time: Time{},
-			want: "null",
-		},
-		{
-			name: "valid time",
-			time: Time{Time: time.Date(2021, 12, 9, 12, 0, 0, 0, time.UTC)},
-			want: `"2021-12-09T12:00:00Z"`,
-		},
+		{"zero time", Time{}, "null"},
+		{"valid time", Time{Time: time.Date(2021, 12, 9, 12, 0, 0, 0, time.UTC)}, `"2021-12-09T12:00:00Z"`},
 	}
 
 	for _, tt := range tests {
@@ -627,28 +518,11 @@ func TestTime_MarshalJSON(t *testing.T) {
 }
 
 func TestListOptions(t *testing.T) {
-	cfg := &listConfig{}
-
-	WithListLimit(50)(cfg)
+	cfg := newListConfig(WithListLimit(50), WithListOffset(10))
 	if cfg.limit != 50 {
 		t.Errorf("expected limit=50, got %d", cfg.limit)
 	}
-
-	WithListOffset(10)(cfg)
 	if cfg.offset != 10 {
 		t.Errorf("expected offset=10, got %d", cfg.offset)
-	}
-
-	WithListSort("name", true)(cfg)
-	if cfg.sort != "name" {
-		t.Errorf("expected sort=name, got %s", cfg.sort)
-	}
-	if cfg.order != "asc" {
-		t.Errorf("expected order=asc, got %s", cfg.order)
-	}
-
-	WithListSort("created", false)(cfg)
-	if cfg.order != "desc" {
-		t.Errorf("expected order=desc, got %s", cfg.order)
 	}
 }

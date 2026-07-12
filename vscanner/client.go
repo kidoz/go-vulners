@@ -325,17 +325,31 @@ func (c *Client) Result() *ResultService {
 type License struct {
 	ID         string `json:"id,omitempty"`
 	Type       string `json:"type,omitempty"`
-	ValidUntil *Time  `json:"validUntil,omitempty"`
+	ValidUntil *Time  `json:"expiration,omitempty"`
 	Hosts      int    `json:"hosts,omitempty"`
+}
+
+type licenseListResponse struct {
+	Licenses []License `json:"licenseList"`
+}
+
+func (r *licenseListResponse) UnmarshalJSON(data []byte) error {
+	type responseAlias licenseListResponse
+	var response responseAlias
+	if err := json.Unmarshal(data, &response); err == nil && response.Licenses != nil {
+		r.Licenses = response.Licenses
+		return nil
+	}
+	return json.Unmarshal(data, &r.Licenses)
 }
 
 // GetLicenses returns the available VScanner licenses.
 func (c *Client) GetLicenses(ctx context.Context) ([]License, error) {
-	var licenses []License
-	if err := c.doGet(ctx, "/api/v3/vscanner/licenses", nil, &licenses); err != nil {
+	var resp licenseListResponse
+	if err := c.doGet(ctx, "/api/v3/useraction/licenseids", nil, &resp); err != nil {
 		return nil, err
 	}
-	return licenses, nil
+	return resp.Licenses, nil
 }
 
 // do performs an HTTP request with retry logic.

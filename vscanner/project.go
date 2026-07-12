@@ -107,7 +107,7 @@ func (s *ProjectService) List(ctx context.Context, opts ...ListOption) ([]Projec
 	}
 
 	var resp projectListResponse
-	if err := s.client.doGet(ctx, "/api/v3/vscanner/projects", params, &resp); err != nil {
+	if err := s.client.doGet(ctx, "/api/v3/proxy/vscanner/v2/projects/", params, &resp); err != nil {
 		return nil, err
 	}
 

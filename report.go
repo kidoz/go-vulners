@@ -1,7 +1,10 @@
 package vulners
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 )
 
 // ReportService provides methods for vulnerability reporting.
@@ -111,11 +114,35 @@ type HostVuln struct {
 
 // reportRequest represents a generic report request.
 type reportRequest struct {
-	Filter map[string]interface{} `json:"filter,omitempty"`
-	Sort   string                 `json:"sort,omitempty"`
-	Order  string                 `json:"order,omitempty"`
-	Limit  int                    `json:"limit,omitempty"`
-	Offset int                    `json:"offset,omitempty"`
+	ReportType string                 `json:"reporttype"`
+	Filter     map[string]interface{} `json:"filter"`
+	Sort       string                 `json:"sort"`
+	Size       int                    `json:"size"`
+	Skip       int                    `json:"skip"`
+}
+
+type reportResponse struct {
+	Report json.RawMessage
+}
+
+func (r *reportResponse) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		r.Report = append(r.Report[:0], data...)
+		return nil
+	}
+	var envelope struct {
+		Report json.RawMessage `json:"report"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return err
+	}
+	if len(envelope.Report) > 0 {
+		r.Report = envelope.Report
+	} else {
+		r.Report = append(r.Report[:0], data...)
+	}
+	return nil
 }
 
 // VulnsSummaryReport gets a summary of vulnerabilities.
@@ -128,12 +155,8 @@ func (s *ReportService) VulnsSummaryReport(ctx context.Context, opts ...ReportOp
 		opt(cfg)
 	}
 
-	req := reportRequest{
-		Filter: cfg.filter,
-	}
-
 	var resp VulnsSummary
-	if err := s.transport.doPost(ctx, "/api/v3/report/vulns/summary/", req, &resp); err != nil {
+	if err := s.doReport(ctx, "vulnssummary", cfg, &resp); err != nil {
 		return nil, err
 	}
 
@@ -150,16 +173,8 @@ func (s *ReportService) VulnsList(ctx context.Context, opts ...ReportOption) ([]
 		opt(cfg)
 	}
 
-	req := reportRequest{
-		Filter: cfg.filter,
-		Sort:   cfg.sort,
-		Order:  cfg.order,
-		Limit:  cfg.limit,
-		Offset: cfg.offset,
-	}
-
 	var resp []VulnItem
-	if err := s.transport.doPost(ctx, "/api/v3/report/vulns/list/", req, &resp); err != nil {
+	if err := s.doReport(ctx, "vulnslist", cfg, &resp); err != nil {
 		return nil, err
 	}
 
@@ -174,12 +189,8 @@ func (s *ReportService) IPSummaryReport(ctx context.Context, opts ...ReportOptio
 		opt(cfg)
 	}
 
-	req := reportRequest{
-		Filter: cfg.filter,
-	}
-
 	var resp IPSummary
-	if err := s.transport.doPost(ctx, "/api/v3/report/ip/summary/", req, &resp); err != nil {
+	if err := s.doReport(ctx, "ipsummary", cfg, &resp); err != nil {
 		return nil, err
 	}
 
@@ -196,16 +207,8 @@ func (s *ReportService) ScanList(ctx context.Context, opts ...ReportOption) ([]S
 		opt(cfg)
 	}
 
-	req := reportRequest{
-		Filter: cfg.filter,
-		Sort:   cfg.sort,
-		Order:  cfg.order,
-		Limit:  cfg.limit,
-		Offset: cfg.offset,
-	}
-
 	var resp []ScanItem
-	if err := s.transport.doPost(ctx, "/api/v3/report/scan/list/", req, &resp); err != nil {
+	if err := s.doReport(ctx, "scanlist", cfg, &resp); err != nil {
 		return nil, err
 	}
 
@@ -222,18 +225,48 @@ func (s *ReportService) HostVulns(ctx context.Context, opts ...ReportOption) ([]
 		opt(cfg)
 	}
 
-	req := reportRequest{
-		Filter: cfg.filter,
-		Sort:   cfg.sort,
-		Order:  cfg.order,
-		Limit:  cfg.limit,
-		Offset: cfg.offset,
-	}
-
 	var resp []HostVuln
-	if err := s.transport.doPost(ctx, "/api/v3/report/host/vulns/", req, &resp); err != nil {
+	if err := s.doReport(ctx, "hostvulns", cfg, &resp); err != nil {
 		return nil, err
 	}
 
 	return resp, nil
+}
+
+func (s *ReportService) doReport(ctx context.Context, reportType string, cfg *reportConfig, result interface{}) error {
+	sortField := cfg.sort
+	if sortField != "" && cfg.order == "desc" {
+		sortField = "-" + sortField
+	}
+	limit := cfg.limit
+	if limit == 0 {
+		limit = 30
+	}
+	req := reportRequest{
+		ReportType: reportType,
+		Filter:     cfg.filter,
+		Sort:       sortField,
+		Size:       limit,
+		Skip:       cfg.offset,
+	}
+
+	var resp reportResponse
+	if err := s.transport.doPost(ctx, "/api/v3/reports/vulnsreport", req, &resp); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(resp.Report, result); err != nil {
+		if reportType == "vulnssummary" || reportType == "ipsummary" {
+			var rows []json.RawMessage
+			if arrayErr := json.Unmarshal(resp.Report, &rows); arrayErr == nil {
+				if len(rows) == 0 {
+					return nil
+				}
+				if rowErr := json.Unmarshal(rows[0], result); rowErr == nil {
+					return nil
+				}
+			}
+		}
+		return fmt.Errorf("failed to decode %s report: %w", reportType, err)
+	}
+	return nil
 }

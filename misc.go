@@ -3,6 +3,7 @@ package vulners
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strconv"
 )
 
@@ -68,11 +69,12 @@ type aiScoreResponse struct {
 // suggestionRequest represents a suggestion request.
 type suggestionRequest struct {
 	FieldName string `json:"fieldName"`
+	Type      string `json:"type"`
 }
 
 // suggestionResponse represents a suggestion response.
 type suggestionResponse struct {
-	Suggestions []string `json:"suggestions"`
+	Suggest []string `json:"suggest"`
 }
 
 // autocompleteRequest represents an autocomplete request.
@@ -95,21 +97,21 @@ type CPESearchResult struct {
 }
 
 // SearchCPE searches for CPE (Common Platform Enumeration) entries.
-// Both product and vendor are required parameters per the API spec.
+// The vendor may be empty when searching across all vendors.
 func (s *MiscService) SearchCPE(ctx context.Context, product, vendor string, opts ...CPEOption) (*CPESearchResult, error) {
 	if err := validateRequired("product", product); err != nil {
 		return nil, err
 	}
-	if err := validateRequired("vendor", vendor); err != nil {
-		return nil, err
-	}
 
 	cfg := &cpeConfig{
-		size: 20,
+		size: 10,
 	}
 
 	for _, opt := range opts {
 		opt(cfg)
+	}
+	if cfg.size < 0 || cfg.size > 100 {
+		return nil, fmt.Errorf("%w: CPE size must be between 0 and 100", ErrInvalidInput)
 	}
 
 	params := map[string]string{
@@ -117,9 +119,7 @@ func (s *MiscService) SearchCPE(ctx context.Context, product, vendor string, opt
 		"vendor":  vendor,
 	}
 
-	if cfg.size > 0 {
-		params["size"] = strconv.Itoa(cfg.size)
-	}
+	params["size"] = strconv.Itoa(cfg.size)
 
 	var resp cpeV4Response
 	if err := s.transport.doGet(ctx, "/api/v4/search/cpe", params, &resp); err != nil {
@@ -158,6 +158,7 @@ func (s *MiscService) GetSuggestion(ctx context.Context, fieldName string) ([]st
 
 	req := suggestionRequest{
 		FieldName: fieldName,
+		Type:      "distinct",
 	}
 
 	var resp suggestionResponse
@@ -165,7 +166,7 @@ func (s *MiscService) GetSuggestion(ctx context.Context, fieldName string) ([]st
 		return nil, err
 	}
 
-	return resp.Suggestions, nil
+	return resp.Suggest, nil
 }
 
 // QueryAutocomplete provides query autocomplete suggestions.

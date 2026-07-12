@@ -68,12 +68,13 @@ func TestArchiveService_FetchCollection(t *testing.T) {
 		{ID: "CVE-2021-45046", Title: "Log4j 2.x vulnerability"},
 	}
 
-	data := map[string]interface{}{
-		"bulletins": expectedBulletins,
-		"total":     2,
-	}
-
-	client := newTestClient(t, jsonHandler(t, data))
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		for i := range expectedBulletins {
+			if err := json.NewEncoder(w).Encode(expectedBulletins[i]); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
 
 	bulletins, err := client.Archive().FetchCollection(context.Background(), CollectionCVE)
 	if err != nil {
@@ -90,12 +91,11 @@ func TestArchiveService_FetchCollection(t *testing.T) {
 }
 
 func TestArchiveService_FetchCollectionUpdate(t *testing.T) {
-	data := map[string]interface{}{
-		"bulletins": []Bulletin{{ID: "CVE-2021-44228"}},
-		"total":     1,
-	}
-
-	client := newTestClient(t, jsonHandler(t, data))
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewEncoder(w).Encode(Bulletin{ID: "CVE-2021-44228"}); err != nil {
+			t.Fatal(err)
+		}
+	})
 
 	since := time.Now().Add(-24 * time.Hour)
 	bulletins, err := client.Archive().FetchCollectionUpdate(context.Background(), CollectionCVE, since)
@@ -215,13 +215,11 @@ func TestWebhookService_Read(t *testing.T) {
 }
 
 func TestSubscriptionService_List(t *testing.T) {
-	data := map[string]interface{}{
-		"subscriptions": []Subscription{
-			{ID: "sub-1", Name: "Critical CVEs", Active: true},
-		},
+	data := []Subscription{
+		{ID: "sub-1", Name: "Critical CVEs", Active: true},
 	}
 
-	client := newTestClient(t, jsonHandler(t, data))
+	client := newTestClient(t, v4Handler(t, data))
 
 	subs, err := client.Subscription().List(context.Background())
 	if err != nil {
@@ -240,7 +238,7 @@ func TestSubscriptionService_List(t *testing.T) {
 func TestSubscriptionService_Get(t *testing.T) {
 	data := Subscription{ID: "sub-1", Name: "Critical CVEs", Active: true}
 
-	client := newTestClient(t, jsonHandler(t, data))
+	client := newTestClient(t, v4Handler(t, data))
 
 	sub, err := client.Subscription().Get(context.Background(), "sub-1")
 	if err != nil {
@@ -268,7 +266,7 @@ func TestSubscriptionService_GetEmptyID(t *testing.T) {
 func TestSubscriptionService_Create(t *testing.T) {
 	data := Subscription{ID: "new-sub", Name: "New Subscription", Active: true}
 
-	client := newTestClient(t, jsonHandler(t, data))
+	client := newTestClient(t, v4Handler(t, data))
 
 	req := &SubscriptionRequest{Name: "New Subscription", Type: "webhook"}
 	sub, err := client.Subscription().Create(context.Background(), req)
@@ -297,7 +295,7 @@ func TestSubscriptionService_CreateNilRequest(t *testing.T) {
 func TestSubscriptionService_Update(t *testing.T) {
 	data := Subscription{ID: "sub-1", Name: "Updated", Active: true}
 
-	client := newTestClient(t, jsonHandler(t, data))
+	client := newTestClient(t, v4Handler(t, data))
 
 	req := &SubscriptionRequest{Name: "Updated"}
 	sub, err := client.Subscription().Update(context.Background(), "sub-1", req)
@@ -340,7 +338,11 @@ func TestStixService_MakeBundleByID(t *testing.T) {
 		ID:   "bundle--12345",
 	}
 
-	client := newTestClient(t, v4Handler(t, data))
+	encoded, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := newTestClient(t, v4Handler(t, string(encoded)))
 
 	bundle, err := client.Stix().MakeBundleByID(context.Background(), "CVE-2021-44228")
 	if err != nil {
@@ -551,15 +553,22 @@ func TestMiscService_SearchCPEEmptyProduct(t *testing.T) {
 }
 
 func TestMiscService_SearchCPEEmptyVendor(t *testing.T) {
-	client := newTestClient(t, jsonHandler(t, nil))
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("vendor") != "" {
+			t.Errorf("expected empty vendor, got %q", r.URL.Query().Get("vendor"))
+		}
+		if r.URL.Query().Get("size") != "10" {
+			t.Errorf("expected default size 10, got %q", r.URL.Query().Get("size"))
+		}
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
+			"result": map[string]interface{}{"best_match": nil, "cpe": []string{}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	})
 
-	_, err := client.Misc().SearchCPE(context.Background(), "chrome", "")
-	if err == nil {
-		t.Error("expected error for empty vendor")
-	}
-
-	if !errors.Is(err, ErrInvalidInput) {
-		t.Errorf("expected ErrInvalidInput, got %v", err)
+	if _, err := client.Misc().SearchCPE(context.Background(), "chrome", ""); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -602,7 +611,7 @@ func TestMiscService_GetAIScoreEmptyText(t *testing.T) {
 
 func TestMiscService_GetSuggestion(t *testing.T) {
 	data := map[string]interface{}{
-		"suggestions": []string{"type", "title", "description"},
+		"suggest": []string{"type", "title", "description"},
 	}
 
 	client := newTestClient(t, jsonHandler(t, data))
@@ -747,7 +756,7 @@ func TestAuditService_SBOMAudit(t *testing.T) {
 			t.Errorf("expected body %q, got %q", sbomContent, string(body))
 		}
 
-		// Return SBOM audit response (v4 format: {"result": [...]})
+		// Return SBOM audit response (v4 format: {"result": {"data": [...]}})
 		fixed := "1.5.0"
 		resp := SBOMAuditResult{
 			Packages: []SBOMPackageResult{
@@ -782,9 +791,10 @@ func TestAuditService_SBOMAudit(t *testing.T) {
 					},
 				},
 			},
+			TotalPackages: 1,
 		}
 		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(resp); err != nil {
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{"result": resp}); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -914,7 +924,13 @@ func TestAuditService_Host(t *testing.T) {
 
 func TestAuditService_GetSupportedOS(t *testing.T) {
 	data := supportedOSResponse{
-		OperatingSystems: []string{"centos", "debian", "ubuntu", "rhel", "oraclelinux"},
+		SupportedOS: map[string]string{
+			"centos":      "rpm",
+			"debian":      "deb",
+			"ubuntu":      "deb",
+			"rhel":        "rpm",
+			"oraclelinux": "rpm",
+		},
 	}
 
 	client := newTestClient(t, jsonHandler(t, data))

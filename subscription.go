@@ -3,7 +3,7 @@ package vulners
 import (
 	"context"
 	"fmt"
-	"net/url"
+	"net/http"
 )
 
 // SubscriptionService provides methods for managing v4 subscriptions.
@@ -13,17 +13,21 @@ type SubscriptionService struct {
 
 // subscriptionListResponse represents the subscription list response.
 type subscriptionListResponse struct {
-	Subscriptions []Subscription `json:"subscriptions"`
+	Result []Subscription `json:"result"`
+}
+
+type subscriptionV4Response struct {
+	Result Subscription `json:"result"`
 }
 
 // List returns all subscriptions.
 func (s *SubscriptionService) List(ctx context.Context) ([]Subscription, error) {
 	var resp subscriptionListResponse
-	if err := s.transport.doGet(ctx, "/api/v4/subscription/list", nil, &resp); err != nil {
+	if err := s.transport.doGet(ctx, "/api/v4/subscriptions/list/", nil, &resp); err != nil {
 		return nil, err
 	}
 
-	return resp.Subscriptions, nil
+	return resp.Result, nil
 }
 
 // Get retrieves a subscription by ID.
@@ -33,15 +37,15 @@ func (s *SubscriptionService) Get(ctx context.Context, id string) (*Subscription
 	}
 
 	params := map[string]string{
-		"id": id,
+		"subscription_id": id,
 	}
 
-	var sub Subscription
-	if err := s.transport.doGet(ctx, "/api/v4/subscription/get", params, &sub); err != nil {
+	var resp subscriptionV4Response
+	if err := s.transport.doGet(ctx, "/api/v4/subscriptions/get/", params, &resp); err != nil {
 		return nil, err
 	}
 
-	return &sub, nil
+	return &resp.Result, nil
 }
 
 // Create creates a new subscription.
@@ -50,12 +54,12 @@ func (s *SubscriptionService) Create(ctx context.Context, req *SubscriptionReque
 		return nil, fmt.Errorf("%w: subscription request is required", ErrInvalidInput)
 	}
 
-	var sub Subscription
-	if err := s.transport.doPost(ctx, "/api/v4/subscription/create", req, &sub); err != nil {
+	var resp subscriptionV4Response
+	if err := s.transport.doPost(ctx, "/api/v4/subscriptions/create/", req, &resp); err != nil {
 		return nil, err
 	}
 
-	return &sub, nil
+	return &resp.Result, nil
 }
 
 // Update updates an existing subscription.
@@ -75,12 +79,12 @@ func (s *SubscriptionService) Update(ctx context.Context, id string, req *Subscr
 		SubscriptionRequest: req,
 	}
 
-	var sub Subscription
-	if err := s.transport.doPut(ctx, "/api/v4/subscription/update", updateReq, &sub); err != nil {
+	var resp subscriptionV4Response
+	if err := s.transport.doPut(ctx, "/api/v4/subscriptions/update/", updateReq, &resp); err != nil {
 		return nil, err
 	}
 
-	return &sub, nil
+	return &resp.Result, nil
 }
 
 // Delete removes a subscription.
@@ -89,8 +93,7 @@ func (s *SubscriptionService) Delete(ctx context.Context, id string) error {
 		return err
 	}
 
-	path := fmt.Sprintf("/api/v4/subscription/delete?id=%s", url.QueryEscape(id))
-	return s.transport.doDelete(ctx, path, nil)
+	return s.transport.do(ctx, http.MethodDelete, "/api/v4/subscriptions/delete/", map[string]string{"id": id}, nil)
 }
 
 // Enable enables or disables a subscription.

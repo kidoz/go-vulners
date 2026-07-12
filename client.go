@@ -233,6 +233,14 @@ func (t *transport) handleResponse(resp *http.Response, result any) error {
 
 	// Check for API-level errors
 	if apiResp.Result != "OK" && apiResp.Result != "" {
+		trimmedResult := strings.TrimSpace(apiResp.Result)
+		if result != nil && len(apiResp.Data) == 0 &&
+			(strings.HasPrefix(trimmedResult, "{") || strings.HasPrefix(trimmedResult, "[")) {
+			if err := json.Unmarshal(bodyBytes, result); err != nil {
+				return fmt.Errorf("failed to unmarshal JSON result: %w", err)
+			}
+			return nil
+		}
 		if apiResp.Error != "" {
 			return NewAPIError(resp.StatusCode, apiResp.Error, apiResp.Result)
 		}
@@ -382,6 +390,48 @@ func (t *transport) doGet(ctx context.Context, path string, params map[string]st
 	return t.do(ctx, http.MethodGet, path, nil, result)
 }
 
+func (t *transport) doGetBytes(ctx context.Context, path string, params map[string]string) ([]byte, error) {
+	if len(params) > 0 {
+		values := url.Values{}
+		for key, value := range params {
+			values.Set(key, value)
+		}
+		path += "?" + values.Encode()
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, t.baseURL+path, http.NoBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	if t.apiKey != "" {
+		req.Header.Set("X-Api-Key", t.apiKey)
+	}
+	req.Header.Set("User-Agent", t.userAgent)
+	req.Header.Set("Accept", "application/gzip, application/x-ndjson")
+
+	resp, err := t.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 400 {
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
+		if readErr != nil {
+			return nil, fmt.Errorf("failed to read error response: %w", readErr)
+		}
+		return nil, t.handleErrorResponse(resp.StatusCode, body, resp.Header)
+	}
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+	if len(data) > maxResponseSize {
+		return nil, fmt.Errorf("vulners: response body exceeds maximum size of %d bytes", maxResponseSize)
+	}
+	return data, nil
+}
+
 // doPost performs a POST request with a JSON body.
 func (t *transport) doPost(ctx context.Context, path string, body, result any) error {
 	return t.do(ctx, http.MethodPost, path, body, result)
@@ -509,9 +559,4 @@ func (t *transport) handleResponseDirect(resp *http.Response, result any) error 
 // doPut performs a PUT request with a JSON body.
 func (t *transport) doPut(ctx context.Context, path string, body, result any) error {
 	return t.do(ctx, http.MethodPut, path, body, result)
-}
-
-// doDelete performs a DELETE request.
-func (t *transport) doDelete(ctx context.Context, path string, result any) error {
-	return t.do(ctx, http.MethodDelete, path, nil, result)
 }

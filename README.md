@@ -102,12 +102,25 @@ results, err := client.Search().SearchBulletins(ctx, "CVE-2021-44228",
 // Search for exploits only
 exploits, err := client.Search().SearchExploits(ctx, "apache")
 
+// Get all matching exploits with pagination
+allExploits, err := client.Search().SearchExploitsAll(ctx, "apache")
+
 // Get bulletin by ID
 bulletin, err := client.Search().GetBulletin(ctx, "CVE-2021-44228")
 
 // Get multiple bulletins
 bulletins, err := client.Search().GetMultipleBulletins(ctx,
     []string{"CVE-2021-44228", "CVE-2021-45046"},
+)
+
+// Fetch bulletins and their grouped references in one request
+withReferences, err := client.Search().GetMultipleBulletinsWithReferences(ctx,
+    []string{"CVE-2021-44228", "CVE-2021-45046"},
+)
+
+// Search vulnerabilities associated with web paths
+webVulns, err := client.Search().GetWebVulnerabilities(ctx,
+    []string{"/admin", "/login"}, nil,
 )
 
 // Get all results with pagination
@@ -119,10 +132,13 @@ allBulletins, err := client.Search().SearchBulletinsAll(ctx, "type:cve",
 ### Audit Service
 
 ```go
-// Audit Linux packages
+// Audit Linux packages with the modern v4 endpoint
 packages := []string{"glibc-common-2.17-157.el7_3.5.x86_64"}
-result, err := client.Audit().LinuxAudit(ctx, "centos", "7", packages)
-fmt.Printf("Found %d CVEs, max CVSS: %.1f\n", len(result.CVEList), result.CVSSScore)
+linuxResult, err := client.Audit().LinuxAuditV4(ctx, "centos", "7", packages,
+    vulners.WithOSArch("x86_64"),
+    vulners.WithIncludeCandidates(true),
+)
+fmt.Printf("Analyzed %d packages\n", linuxResult.TotalPackages)
 
 // Audit Windows KBs
 kbList := []string{"KB5009586", "KB5009624"}
@@ -130,9 +146,20 @@ result, err := client.Audit().KBAudit(ctx, "Windows Server 2012 R2", kbList)
 
 // Audit software CPEs
 software := []vulners.AuditItem{
-    {Software: "apache", Version: "2.4.49", Type: "software"},
+    {Part: "a", Product: "apache", Version: "2.4.49"},
 }
 result, err := client.Audit().Software(ctx, software)
+
+// Audit libraries using Package URLs (PURLs)
+libraryResult, err := client.Audit().LibraryAudit(ctx,
+    []string{"pkg:golang/golang.org/x/text@v0.3.0"},
+)
+
+// Find package and CPE definitions affected by CVEs
+cveResult, err := client.Audit().CVEAudit(ctx, "CVE-2021-44228")
+cveResults, err := client.Audit().CVEBatchAudit(ctx,
+    []string{"CVE-2021-44228", "CVE-2021-45046"},
+)
 
 // Audit an SBOM file (SPDX or CycloneDX JSON)
 f, err := os.Open("sbom.spdx.json")

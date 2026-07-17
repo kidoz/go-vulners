@@ -79,6 +79,58 @@ func TestIntegration_AuditExtendedSurface(t *testing.T) {
 	}
 }
 
+func TestIntegration_SmartAudit(t *testing.T) {
+	client := getTestClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	result, err := client.Audit().SmartAudit(
+		ctx,
+		[]string{"OpenSSL 1.0.1"},
+		WithAuditCatalog("extended"),
+	)
+	if err != nil {
+		t.Fatalf("SmartAudit failed: %v", err)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("SmartAudit returned %d items, want 1", len(result.Items))
+	}
+	if result.Items[0].Input != "OpenSSL 1.0.1" {
+		t.Errorf("SmartAudit returned input %q, want %q", result.Items[0].Input, "OpenSSL 1.0.1")
+	}
+	item := result.Items[0]
+	if item.CPE == "" {
+		t.Error("SmartAudit returned an empty CPE")
+	}
+	if len(item.PURLs) == 0 {
+		t.Error("SmartAudit returned no pURLs")
+	}
+	if confidence := item.Confidence; confidence < 0 || confidence > 1 {
+		t.Errorf("SmartAudit returned confidence %f outside [0,1]", confidence)
+	}
+	if len(item.Vulnerabilities) == 0 {
+		t.Fatal("SmartAudit returned no vulnerabilities")
+	}
+
+	vulnerability := item.Vulnerabilities[0]
+	if vulnerability.ID == "" || vulnerability.Title == "" || vulnerability.ShortDescription == "" {
+		t.Errorf("SmartAudit returned incomplete vulnerability fields: %+v", vulnerability)
+	}
+	if vulnerability.Type == "" || vulnerability.Href == "" {
+		t.Errorf("SmartAudit returned incomplete vulnerability metadata: %+v", vulnerability)
+	}
+	if vulnerability.Published == nil || vulnerability.Modified == nil || vulnerability.AIScore == nil {
+		t.Errorf("SmartAudit returned incomplete vulnerability scoring or dates: %+v", vulnerability)
+	}
+	if len(vulnerability.Reasons) == 0 || len(vulnerability.Reasons[0].Criteria) == 0 ||
+		len(vulnerability.Reasons[0].Criteria[0]) == 0 {
+		t.Fatalf("SmartAudit returned incomplete match reasons: %+v", vulnerability.Reasons)
+	}
+	if vulnerability.Reasons[0].Criteria[0][0].Criteria == "" {
+		t.Error("SmartAudit returned an empty match criterion")
+	}
+}
+
 func TestIntegration_MiscExtendedSurface(t *testing.T) {
 	client := getTestClient(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

@@ -11,7 +11,7 @@ A Go client library for the [Vulners](https://vulners.com) vulnerability databas
 
 - Full coverage of Vulners API v3/v4
 - Search for vulnerabilities, exploits, and security bulletins
-- Audit Linux packages, Windows KBs, software CPEs, and SBOM files
+- Audit Linux packages, Windows KBs, software CPEs, raw software descriptions, and SBOM files
 - VScanner integration for vulnerability scanning
 - Built-in rate limiting with dynamic adjustment
 - Automatic retry with exponential backoff
@@ -149,6 +149,12 @@ software := []vulners.AuditItem{
     {Part: "a", Product: "apache", Version: "2.4.49"},
 }
 result, err := client.Audit().Software(ctx, software)
+
+// Resolve free-form software descriptions and audit the matched CPEs
+smartResult, err := client.Audit().SmartAudit(ctx,
+    []string{"Adobe Reader 5.3", "OpenSSL 1.0.1"},
+    vulners.WithAuditCatalog("official"),
+)
 
 // Audit libraries using Package URLs (PURLs)
 libraryResult, err := client.Audit().LibraryAudit(ctx,

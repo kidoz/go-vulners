@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 )
@@ -105,6 +106,69 @@ func TestArchiveService_FetchCollectionUpdate(t *testing.T) {
 
 	if len(bulletins) != 1 {
 		t.Errorf("expected 1 bulletin, got %d", len(bulletins))
+	}
+}
+
+// TestFetchCollection_FollowsCrossHostRedirect is the regression test for the
+// reported bug: /api/v4/archive/collection redirects the client to a CDN host
+// (e.g. storage.googleapis.com) for the large cached collection. The client
+// must follow the redirect and must not leak the API key to the CDN.
+//
+// Two httptest servers on different 127.0.0.1 ports simulate the cross-host
+// redirect: the API server returns 302 to the CDN server, which streams the
+// collection. The CDN handler asserts that no X-Api-Key arrived.
+func TestFetchCollection_FollowsCrossHostRedirect(t *testing.T) {
+	var cdnReceivedAPIKey string
+
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cdnReceivedAPIKey = r.Header.Get("X-Api-Key")
+		// Stream two bulletin records as NDJSON
+		bulletins := []Bulletin{
+			{ID: "CVE-2024-0001"},
+			{ID: "CVE-2024-0002"},
+		}
+		for _, b := range bulletins {
+			if err := json.NewEncoder(w).Encode(b); err != nil {
+				t.Errorf("encode bulletin: %v", err)
+			}
+		}
+	}))
+	t.Cleanup(cdn.Close)
+
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Redirect to the CDN host, which is on a different port (cross-host).
+		http.Redirect(w, r, cdn.URL, http.StatusFound)
+	}))
+	t.Cleanup(api.Close)
+
+	// Build the client against the API server, and allow the CDN host explicitly
+	// (httptest hosts are 127.0.0.1:<port>, not storage.googleapis.com).
+	cdnURL, err := url.Parse(cdn.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewClient("test-key",
+		WithBaseURL(api.URL),
+		WithAllowInsecure(),
+		WithAllowedRedirectHosts(cdnURL.Host),
+		WithRateLimit(100, 100),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bulletins, err := client.Archive().FetchCollection(context.Background(), CollectionCVE)
+	if err != nil {
+		t.Fatalf("FetchCollection failed: %v", err)
+	}
+	if len(bulletins) != 2 {
+		t.Fatalf("expected 2 bulletins, got %d", len(bulletins))
+	}
+	if bulletins[0].ID != "CVE-2024-0001" || bulletins[1].ID != "CVE-2024-0002" {
+		t.Errorf("unexpected bulletins: %+v", bulletins)
+	}
+	if cdnReceivedAPIKey != "" {
+		t.Errorf("API key leaked to CDN host via redirect: %q", cdnReceivedAPIKey)
 	}
 }
 

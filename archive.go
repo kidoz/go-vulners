@@ -95,7 +95,7 @@ func (s *ArchiveService) fetchArchive(ctx context.Context, path string, params m
 
 	var bulletins []Bulletin
 	scanner := bufio.NewScanner(bytes.NewReader(decoded))
-	scanner.Buffer(make([]byte, 64*1024), maxResponseSize)
+	scanner.Buffer(make([]byte, 64*1024), int(s.transport.maxResponseSize))
 	for scanner.Scan() {
 		line := bytes.TrimSpace(scanner.Bytes())
 		if len(line) == 0 {

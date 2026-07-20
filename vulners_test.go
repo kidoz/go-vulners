@@ -806,3 +806,82 @@ func TestWithAllowedRedirectHosts(t *testing.T) {
 		assert.Empty(t, seenKey, "API key must be stripped before reaching the redirect target")
 	})
 }
+
+func TestWithMaxResponseSize(t *testing.T) {
+	t.Run("sets the configured value", func(t *testing.T) {
+		var cfg clientConfig
+		WithMaxResponseSize(123)(&cfg)
+		assert.Equal(t, int64(123), cfg.maxResponseSize)
+	})
+
+	t.Run("non-positive value restores the default", func(t *testing.T) {
+		var cfg clientConfig
+		WithMaxResponseSize(0)(&cfg)
+		assert.Equal(t, DefaultMaxResponseSize, cfg.maxResponseSize)
+
+		WithMaxResponseSize(-5)(&cfg)
+		assert.Equal(t, DefaultMaxResponseSize, cfg.maxResponseSize)
+	})
+
+	t.Run("NewClient applies the default", func(t *testing.T) {
+		c, err := NewClient("k", WithAllowInsecure(), WithBaseURL("http://localhost"))
+		require.NoError(t, err)
+		assert.Equal(t, DefaultMaxResponseSize, c.transport.maxResponseSize)
+	})
+
+	t.Run("raised limit allows a large response that the default rejects", func(t *testing.T) {
+		// Default is 50 MiB. A 60 MiB body should fail under the default and
+		// succeed when the limit is raised to 64 MiB.
+		const bodySize = 60 * 1024 * 1024
+
+		serveLargeBody := func() *httptest.Server {
+			return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				// Write a valid wrapped response whose data is a large JSON string.
+				_, _ = io.WriteString(w, `{"result":"OK","data":"`)
+				// Use io.Copy from a zero reader to avoid allocating bodySize in memory on the server.
+				_, _ = io.CopyN(w, zeroReader{}, bodySize)
+				_, _ = io.WriteString(w, `"}`)
+			}))
+		}
+
+		// Default limit → expect rejection.
+		srvDefault := serveLargeBody()
+		t.Cleanup(srvDefault.Close)
+		cDefault, err := NewClient("k",
+			WithBaseURL(srvDefault.URL),
+			WithAllowInsecure(),
+			WithRateLimit(100, 100),
+		)
+		require.NoError(t, err)
+		var out string
+		err = cDefault.transport.doGet(context.Background(), "/x", nil, &out)
+		require.Error(t, err, "default 50 MiB limit should reject a 60 MiB body")
+		assert.Contains(t, err.Error(), "exceeds maximum size")
+
+		// Raised limit → expect success.
+		srvRaised := serveLargeBody()
+		t.Cleanup(srvRaised.Close)
+		cRaised, err := NewClient("k",
+			WithBaseURL(srvRaised.URL),
+			WithAllowInsecure(),
+			WithRateLimit(100, 100),
+			WithMaxResponseSize(64*1024*1024),
+		)
+		require.NoError(t, err)
+		var out2 string
+		err = cRaised.transport.doGet(context.Background(), "/x", nil, &out2)
+		require.NoError(t, err, "raised 64 MiB limit should accept a 60 MiB body")
+		assert.Len(t, out2, bodySize, "full body should be decoded")
+	})
+}
+
+// zeroReader is an io.Reader that returns an infinite stream of '0' bytes.
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = '0'
+	}
+	return len(p), nil
+}

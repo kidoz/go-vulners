@@ -67,6 +67,7 @@ type clientConfig struct {
 	proxyURL             string
 	allowInsecure        bool // allow HTTP (for testing only)
 	allowedRedirectHosts []string
+	maxResponseSize      int64
 }
 
 // defaultAllowedRedirectHosts lists hosts the client will follow cross-host
@@ -91,6 +92,7 @@ func NewClient(apiKey string, opts ...Option) (*Client, error) {
 		rateLimit:            defaultRateLimit,
 		rateBurst:            defaultBurst,
 		allowedRedirectHosts: append([]string(nil), defaultAllowedRedirectHosts...),
+		maxResponseSize:      DefaultMaxResponseSize,
 	}
 
 	// Apply options
@@ -146,6 +148,7 @@ func NewClient(apiKey string, opts ...Option) (*Client, error) {
 		cfg.userAgent,
 		cfg.maxRetries,
 		rateLimiter,
+		cfg.maxResponseSize,
 	)
 
 	return &Client{transport: t}, nil
@@ -222,6 +225,26 @@ func WithAllowedRedirectHosts(hosts ...string) Option {
 			}
 			c.allowedRedirectHosts = append(c.allowedRedirectHosts, h)
 		}
+	}
+}
+
+// WithMaxResponseSize sets the maximum size in bytes for a single HTTP response
+// body. Responses larger than this are rejected with an error to protect against
+// runaway memory use. The default is DefaultMaxResponseSize (50 MiB).
+//
+// Raise this limit when fetching large archive collections (e.g. the "cve",
+// "ubuntu", or "debian" collections via ArchiveService.FetchCollection), whose
+// CDN-cached downloads can exceed the default. Setting a value <= 0 restores the
+// default.
+//
+// The limit applies to the decoded (post-gunzip) response body.
+func WithMaxResponseSize(maxBytes int64) Option {
+	return func(c *clientConfig) {
+		if maxBytes <= 0 {
+			c.maxResponseSize = DefaultMaxResponseSize
+			return
+		}
+		c.maxResponseSize = maxBytes
 	}
 }
 

@@ -24,7 +24,7 @@ import (
 const (
 	defaultBaseURL   = "https://vulners.com"
 	defaultTimeout   = 30 * time.Second
-	defaultUserAgent = "go-vulners/1.3.3"
+	defaultUserAgent = "go-vulners/1.3.4"
 
 	// Default rate limit values (conservative defaults)
 	defaultRateLimit = 5.0 // requests per second
@@ -34,10 +34,11 @@ const (
 	defaultMaxRetries = 3
 	baseRetryDelay    = 500 * time.Millisecond
 	maxRetryDelay     = 30 * time.Second
-
-	// Response size limit (50MB)
-	maxResponseSize = 50 * 1024 * 1024
 )
+
+// DefaultMaxResponseSize is the default maximum size (50 MiB) for a single HTTP
+// response body. See WithMaxResponseSize to override it.
+const DefaultMaxResponseSize int64 = 50 * 1024 * 1024
 
 // httpClient performs HTTP requests. Extracted for testing.
 type httpClient interface {
@@ -46,13 +47,14 @@ type httpClient interface {
 
 // transport handles the HTTP communication with the Vulners API.
 type transport struct {
-	httpClient  httpClient
-	baseURL     string
-	apiKey      string
-	userAgent   string
-	maxRetries  int
-	rateLimiter *RateLimiter
-	rng         *lockedRand // thread-safe RNG for jitter
+	httpClient      httpClient
+	baseURL         string
+	apiKey          string
+	userAgent       string
+	maxRetries      int
+	rateLimiter     *RateLimiter
+	rng             *lockedRand // thread-safe RNG for jitter
+	maxResponseSize int64
 }
 
 // lockedRand wraps rand.Rand with a mutex for thread-safe concurrent access.
@@ -76,15 +78,19 @@ func newLockedRand() *lockedRand {
 }
 
 // newTransport creates a new transport with the given configuration.
-func newTransport(httpClient httpClient, baseURL, apiKey, userAgent string, maxRetries int, rateLimiter *RateLimiter) *transport {
+func newTransport(httpClient httpClient, baseURL, apiKey, userAgent string, maxRetries int, rateLimiter *RateLimiter, maxResponseSize int64) *transport {
+	if maxResponseSize <= 0 {
+		maxResponseSize = DefaultMaxResponseSize
+	}
 	return &transport{
-		httpClient:  httpClient,
-		baseURL:     strings.TrimSuffix(baseURL, "/"),
-		apiKey:      apiKey,
-		userAgent:   userAgent,
-		maxRetries:  maxRetries,
-		rateLimiter: rateLimiter,
-		rng:         newLockedRand(),
+		httpClient:      httpClient,
+		baseURL:         strings.TrimSuffix(baseURL, "/"),
+		apiKey:          apiKey,
+		userAgent:       userAgent,
+		maxRetries:      maxRetries,
+		rateLimiter:     rateLimiter,
+		rng:             newLockedRand(),
+		maxResponseSize: maxResponseSize,
 	}
 }
 
@@ -201,13 +207,13 @@ func (t *transport) handleResponse(resp *http.Response, result any) error {
 	}
 
 	// Read response body with size limit (read one extra byte to detect truncation)
-	limitedReader := &io.LimitedReader{R: reader, N: maxResponseSize + 1}
+	limitedReader := &io.LimitedReader{R: reader, N: t.maxResponseSize + 1}
 	bodyBytes, err := io.ReadAll(limitedReader)
 	if err != nil {
 		return fmt.Errorf("failed to read response body: %w", err)
 	}
 	if limitedReader.N == 0 {
-		return fmt.Errorf("vulners: response body exceeds maximum size of %d bytes", maxResponseSize)
+		return fmt.Errorf("vulners: response body exceeds maximum size of %d bytes", t.maxResponseSize)
 	}
 
 	// Check for HTTP errors
@@ -415,19 +421,19 @@ func (t *transport) doGetBytes(ctx context.Context, path string, params map[stri
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, t.maxResponseSize))
 		if readErr != nil {
 			return nil, fmt.Errorf("failed to read error response: %w", readErr)
 		}
 		return nil, t.handleErrorResponse(resp.StatusCode, body, resp.Header)
 	}
 
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize+1))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, t.maxResponseSize+1))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
-	if len(data) > maxResponseSize {
-		return nil, fmt.Errorf("vulners: response body exceeds maximum size of %d bytes", maxResponseSize)
+	if int64(len(data)) > t.maxResponseSize {
+		return nil, fmt.Errorf("vulners: response body exceeds maximum size of %d bytes", t.maxResponseSize)
 	}
 	return data, nil
 }
@@ -533,13 +539,13 @@ func (t *transport) handleResponseDirect(resp *http.Response, result any) error 
 		reader = gzReader
 	}
 
-	limitedReader := &io.LimitedReader{R: reader, N: maxResponseSize + 1}
+	limitedReader := &io.LimitedReader{R: reader, N: t.maxResponseSize + 1}
 	bodyBytes, err := io.ReadAll(limitedReader)
 	if err != nil {
 		return fmt.Errorf("failed to read response body: %w", err)
 	}
 	if limitedReader.N == 0 {
-		return fmt.Errorf("vulners: response body exceeds maximum size of %d bytes", maxResponseSize)
+		return fmt.Errorf("vulners: response body exceeds maximum size of %d bytes", t.maxResponseSize)
 	}
 
 	if resp.StatusCode >= 400 {

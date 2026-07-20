@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -684,3 +685,124 @@ type timeoutErr bool
 func (e timeoutErr) Error() string   { return "timeout error" }
 func (e timeoutErr) Timeout() bool   { return bool(e) }
 func (e timeoutErr) Temporary() bool { return bool(e) }
+
+func TestMakeCheckRedirect(t *testing.T) {
+	const apiKey = "secret-key"
+	base := "https://vulners.com"
+
+	newReq := func(rawURL string) *http.Request {
+		req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+		require.NoError(t, err)
+		req.Header.Set("X-Api-Key", apiKey)
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set("Cookie", "session=abc")
+		return req
+	}
+
+	t.Run("same host keeps sensitive headers", func(t *testing.T) {
+		check := makeCheckRedirect(base, []string{"storage.googleapis.com"})
+		req := newReq("https://vulners.com/api/v4/archive/collection")
+		err := check(req, []*http.Request{newReq("https://vulners.com/start")})
+		require.NoError(t, err)
+		assert.Equal(t, apiKey, req.Header.Get("X-Api-Key"))
+		assert.Equal(t, "Bearer "+apiKey, req.Header.Get("Authorization"))
+		assert.Equal(t, "session=abc", req.Header.Get("Cookie"))
+	})
+
+	t.Run("allowlisted CDN host strips sensitive headers", func(t *testing.T) {
+		check := makeCheckRedirect(base, []string{"storage.googleapis.com"})
+		req := newReq("https://storage.googleapis.com/vulners/cve.json")
+		err := check(req, []*http.Request{newReq(base + "/api/v4/archive/collection")})
+		require.NoError(t, err)
+		assert.Empty(t, req.Header.Get("X-Api-Key"))
+		assert.Empty(t, req.Header.Get("Authorization"))
+		assert.Empty(t, req.Header.Get("Cookie"))
+	})
+
+	t.Run("allowlist matches case-insensitively", func(t *testing.T) {
+		check := makeCheckRedirect(base, []string{"Storage.Googleapis.COM"})
+		req := newReq("https://storage.googleapis.com/x")
+		require.NoError(t, check(req, []*http.Request{}))
+	})
+
+	t.Run("unknown host is blocked", func(t *testing.T) {
+		check := makeCheckRedirect(base, []string{"storage.googleapis.com"})
+		req := newReq("https://evil.example.com/steal")
+		err := check(req, []*http.Request{newReq(base)})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "refusing to follow redirect to different host")
+		assert.Contains(t, err.Error(), "evil.example.com")
+		// Headers must be intact on a blocked request (it won't be sent anyway,
+		// but we must not have mutated the request before deciding to block).
+		assert.Equal(t, apiKey, req.Header.Get("X-Api-Key"))
+	})
+
+	t.Run("HTTPS to HTTP downgrade is blocked even on allowlisted host", func(t *testing.T) {
+		check := makeCheckRedirect(base, []string{"storage.googleapis.com"})
+		req := newReq("http://storage.googleapis.com/x")
+		err := check(req, []*http.Request{newReq(base)})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "refusing to follow redirect from HTTPS to HTTP")
+	})
+
+	t.Run("cap at 10 redirects", func(t *testing.T) {
+		check := makeCheckRedirect(base, nil)
+		via := make([]*http.Request, 10)
+		for i := range via {
+			via[i] = newReq(base)
+		}
+		req := newReq(base)
+		err := check(req, via)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "stopped after 10 redirects")
+	})
+}
+
+func TestWithAllowedRedirectHosts(t *testing.T) {
+	t.Run("appends to defaults, normalizes and drops empties", func(t *testing.T) {
+		var cfg clientConfig
+		// Start from the default set the way NewClient does.
+		cfg.allowedRedirectHosts = append([]string(nil), defaultAllowedRedirectHosts...)
+
+		opt := WithAllowedRedirectHosts("  CDN.Example.COM  ", "", "evil.test")
+		opt(&cfg)
+
+		assert.Equal(t,
+			[]string{"storage.googleapis.com", "cdn.example.com", "evil.test"},
+			cfg.allowedRedirectHosts,
+		)
+	})
+
+	t.Run("built client follows user-added host and strips API key", func(t *testing.T) {
+		var seenKey string
+		target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			seenKey = r.Header.Get("X-Api-Key")
+			// Return a standard wrapped API response so doGet decodes the data.
+			_, _ = io.WriteString(w, `{"result":"OK","data":{"id":"CVE-2024-1"}}`)
+		}))
+		t.Cleanup(target.Close)
+
+		api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, target.URL, http.StatusFound)
+		}))
+		t.Cleanup(api.Close)
+
+		targetURL, err := url.Parse(target.URL)
+		require.NoError(t, err)
+
+		client, err := NewClient("k",
+			WithBaseURL(api.URL),
+			WithAllowInsecure(),
+			WithAllowedRedirectHosts(targetURL.Host),
+			WithRateLimit(100, 100),
+		)
+		require.NoError(t, err)
+
+		var bulletin Bulletin
+		require.NoError(t, client.transport.doGet(context.Background(),
+			"/api/v4/archive/collection", nil, &bulletin))
+
+		assert.Equal(t, "CVE-2024-1", bulletin.ID)
+		assert.Empty(t, seenKey, "API key must be stripped before reaching the redirect target")
+	})
+}

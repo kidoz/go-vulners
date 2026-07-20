@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
@@ -524,5 +525,93 @@ func TestListOptions(t *testing.T) {
 	}
 	if cfg.offset != 10 {
 		t.Errorf("expected offset=10, got %d", cfg.offset)
+	}
+}
+
+// TestMakeCheckRedirect covers the cross-host redirect policy: same-host
+// redirects keep the API key, allowlisted CDN hosts are followed with
+// sensitive headers stripped, and everything else is blocked.
+func TestMakeCheckRedirect(t *testing.T) {
+	const apiKey = "secret-key"
+	base := "https://vulners.com"
+
+	newReq := func(rawURL string) *http.Request {
+		req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("X-Api-Key", apiKey)
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set("Cookie", "session=abc")
+		return req
+	}
+
+	t.Run("same host keeps sensitive headers", func(t *testing.T) {
+		check := makeCheckRedirect(base, []string{"storage.googleapis.com"})
+		req := newReq("https://vulners.com/api/v4/resource")
+		if err := check(req, []*http.Request{newReq(base)}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got := req.Header.Get("X-Api-Key"); got != apiKey {
+			t.Errorf("X-Api-Key lost on same-host redirect: %q", got)
+		}
+	})
+
+	t.Run("allowlisted CDN host strips sensitive headers", func(t *testing.T) {
+		check := makeCheckRedirect(base, []string{"storage.googleapis.com"})
+		req := newReq("https://storage.googleapis.com/x")
+		if err := check(req, []*http.Request{newReq(base)}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got := req.Header.Get("X-Api-Key"); got != "" {
+			t.Errorf("X-Api-Key leaked to CDN host: %q", got)
+		}
+		if got := req.Header.Get("Authorization"); got != "" {
+			t.Errorf("Authorization leaked to CDN host: %q", got)
+		}
+		if got := req.Header.Get("Cookie"); got != "" {
+			t.Errorf("Cookie leaked to CDN host: %q", got)
+		}
+	})
+
+	t.Run("unknown host is blocked", func(t *testing.T) {
+		check := makeCheckRedirect(base, []string{"storage.googleapis.com"})
+		req := newReq("https://evil.example.com/steal")
+		err := check(req, []*http.Request{newReq(base)})
+		if err == nil {
+			t.Fatal("expected error for unknown host, got nil")
+		}
+		if !strings.Contains(err.Error(), "refusing to follow redirect to different host") {
+			t.Errorf("unexpected error message: %v", err)
+		}
+	})
+
+	t.Run("HTTPS to HTTP downgrade is blocked even on allowlisted host", func(t *testing.T) {
+		check := makeCheckRedirect(base, []string{"storage.googleapis.com"})
+		req := newReq("http://storage.googleapis.com/x")
+		err := check(req, []*http.Request{newReq(base)})
+		if err == nil {
+			t.Fatal("expected error for HTTPS->HTTP downgrade, got nil")
+		}
+		if !strings.Contains(err.Error(), "refusing to follow redirect from HTTPS to HTTP") {
+			t.Errorf("unexpected error message: %v", err)
+		}
+	})
+}
+
+func TestWithAllowedRedirectHosts(t *testing.T) {
+	var cfg clientConfig
+	cfg.allowedRedirectHosts = append([]string(nil), defaultAllowedRedirectHosts...)
+
+	WithAllowedRedirectHosts("  CDN.Example.COM  ", "", "extra.test")(&cfg)
+
+	want := []string{"storage.googleapis.com", "cdn.example.com", "extra.test"}
+	if len(cfg.allowedRedirectHosts) != len(want) {
+		t.Fatalf("expected %d hosts, got %d (%v)", len(want), len(cfg.allowedRedirectHosts), cfg.allowedRedirectHosts)
+	}
+	for i := range want {
+		if cfg.allowedRedirectHosts[i] != want[i] {
+			t.Errorf("index %d: want %q, got %q", i, want[i], cfg.allowedRedirectHosts[i])
+		}
 	}
 }

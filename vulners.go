@@ -57,16 +57,23 @@ type Option func(*clientConfig)
 
 // clientConfig holds the configuration for the client.
 type clientConfig struct {
-	baseURL       string
-	timeout       time.Duration
-	maxRetries    int
-	httpClient    *http.Client
-	userAgent     string
-	rateLimit     float64
-	rateBurst     int
-	proxyURL      string
-	allowInsecure bool // allow HTTP (for testing only)
+	baseURL              string
+	timeout              time.Duration
+	maxRetries           int
+	httpClient           *http.Client
+	userAgent            string
+	rateLimit            float64
+	rateBurst            int
+	proxyURL             string
+	allowInsecure        bool // allow HTTP (for testing only)
+	allowedRedirectHosts []string
 }
+
+// defaultAllowedRedirectHosts lists hosts the client will follow cross-host
+// redirects to. The Vulners API redirects large CDN-cached downloads (e.g. the
+// /api/v4/archive/collection response) to these hosts. Sensitive headers
+// (X-Api-Key, Authorization, Cookie) are always stripped before following.
+var defaultAllowedRedirectHosts = []string{"storage.googleapis.com"}
 
 // NewClient creates a new Vulners API client.
 // An API key is required for most operations.
@@ -77,12 +84,13 @@ func NewClient(apiKey string, opts ...Option) (*Client, error) {
 
 	// Apply default configuration
 	cfg := &clientConfig{
-		baseURL:    defaultBaseURL,
-		timeout:    defaultTimeout,
-		maxRetries: defaultMaxRetries,
-		userAgent:  defaultUserAgent,
-		rateLimit:  defaultRateLimit,
-		rateBurst:  defaultBurst,
+		baseURL:              defaultBaseURL,
+		timeout:              defaultTimeout,
+		maxRetries:           defaultMaxRetries,
+		userAgent:            defaultUserAgent,
+		rateLimit:            defaultRateLimit,
+		rateBurst:            defaultBurst,
+		allowedRedirectHosts: append([]string(nil), defaultAllowedRedirectHosts...),
 	}
 
 	// Apply options
@@ -123,7 +131,7 @@ func NewClient(apiKey string, opts ...Option) (*Client, error) {
 			Transport: transport,
 			Timeout:   cfg.timeout,
 			// Prevent API key from being forwarded to different hosts or HTTP
-			CheckRedirect: makeCheckRedirect(cfg.baseURL),
+			CheckRedirect: makeCheckRedirect(cfg.baseURL, cfg.allowedRedirectHosts),
 		}
 	}
 
@@ -169,9 +177,12 @@ func WithRetries(maxRetries int) Option {
 // Note: When using a custom HTTP client, several built-in protections are bypassed:
 //   - The WithTimeout option is ignored; configure timeouts directly on your http.Client.
 //   - The WithProxy option is ignored; configure proxy on your http.Client's Transport.
-//   - The default redirect protection (which prevents API key leakage to different hosts)
-//     is bypassed. If your use case involves redirects, consider setting CheckRedirect
-//     on your http.Client to prevent the API key from being sent to untrusted hosts.
+//   - The default redirect protection (which allows same-host redirects and
+//     redirects to the Vulners CDN after stripping sensitive headers, and blocks
+//     all other cross-host redirects and HTTPS-to-HTTP downgrades) is bypassed.
+//     If your use case involves redirects, consider setting CheckRedirect on
+//     your http.Client to prevent the API key from being sent to untrusted hosts.
+//     See WithAllowedRedirectHosts for the default allowlist.
 //
 // Example with custom redirect protection:
 //
@@ -186,6 +197,31 @@ func WithRetries(maxRetries int) Option {
 func WithHTTPClient(client *http.Client) Option {
 	return func(c *clientConfig) {
 		c.httpClient = client
+	}
+}
+
+// WithAllowedRedirectHosts extends the set of hosts the client will follow
+// cross-host redirects to, in addition to the built-in defaults (which cover
+// the Vulners CDN, e.g. storage.googleapis.com). This is needed because some
+// endpoints (notably /api/v4/archive/collection) respond with a redirect to a
+// CDN-cached copy on a different host.
+//
+// Sensitive headers (X-Api-Key, Authorization, Cookie) are always stripped
+// before a cross-host redirect is followed, regardless of this option.
+//
+// Hosts are matched case-insensitively against the redirect URL's Host
+// (host[:port]). No subdomain wildcarding is performed: an entry of
+// "example.com" matches only "example.com", not "cdn.example.com". Ports are
+// matched literally if present.
+func WithAllowedRedirectHosts(hosts ...string) Option {
+	return func(c *clientConfig) {
+		for _, h := range hosts {
+			h = strings.ToLower(strings.TrimSpace(h))
+			if h == "" {
+				continue
+			}
+			c.allowedRedirectHosts = append(c.allowedRedirectHosts, h)
+		}
 	}
 }
 
@@ -286,20 +322,49 @@ func (c *Client) Stix() *StixService {
 
 // makeCheckRedirect creates a CheckRedirect function that prevents the API key
 // from being forwarded to a different host or downgraded to HTTP.
-func makeCheckRedirect(baseURL string) func(*http.Request, []*http.Request) error {
+//
+// Same-host redirects are always allowed. Cross-host redirects are allowed only
+// when the target host is in allowedHosts (typically the Vulners CDN); in that
+// case sensitive headers (X-Api-Key, Authorization, Cookie) are stripped from
+// the redirected request so the API key never leaves the Vulners API host.
+func makeCheckRedirect(baseURL string, allowedHosts []string) func(*http.Request, []*http.Request) error {
 	parsedBase, _ := url.Parse(baseURL)
 	return func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 10 {
 			return fmt.Errorf("stopped after 10 redirects")
 		}
-		// Block redirects that change the host
-		if parsedBase != nil && req.URL.Host != parsedBase.Host {
-			return fmt.Errorf("vulners: refusing to follow redirect to different host: %s", req.URL.Host)
-		}
-		// Block redirects that downgrade from HTTPS to HTTP
+		// Block redirects that downgrade from HTTPS to HTTP, regardless of host
 		if parsedBase != nil && parsedBase.Scheme == "https" && req.URL.Scheme == "http" {
 			return fmt.Errorf("vulners: refusing to follow redirect from HTTPS to HTTP")
 		}
-		return nil
+		// Same-host redirect: safe, keep headers
+		if parsedBase != nil && req.URL.Host == parsedBase.Host {
+			return nil
+		}
+		// Cross-host redirect: only allow known CDN hosts, and strip sensitive
+		// headers so the API key cannot leak to a third party.
+		if hostAllowed(allowedHosts, req.URL.Host) {
+			req.Header.Del("X-Api-Key")
+			req.Header.Del("Authorization")
+			req.Header.Del("Cookie")
+			return nil
+		}
+		return fmt.Errorf("vulners: refusing to follow redirect to different host: %s", req.URL.Host)
 	}
+}
+
+// hostAllowed reports whether targetHost (the URL.Host of a redirect target,
+// i.e. "host[:port]") matches one of the allowed hosts. Comparison is
+// case-insensitive on the exact host string (no subdomain wildcarding).
+func hostAllowed(allowed []string, targetHost string) bool {
+	target := strings.ToLower(strings.TrimSpace(targetHost))
+	if target == "" {
+		return false
+	}
+	for _, h := range allowed {
+		if strings.ToLower(strings.TrimSpace(h)) == target {
+			return true
+		}
+	}
+	return false
 }

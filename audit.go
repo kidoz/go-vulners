@@ -156,8 +156,9 @@ type cveBatchAuditV4Response struct {
 
 // kbAuditRequest represents a KB audit request.
 type kbAuditRequest struct {
-	OS  string   `json:"os"`
-	KBs []string `json:"kbList"`
+	OS      string   `json:"os"`
+	KBs     []string `json:"kbList"`
+	Details bool     `json:"details,omitempty"`
 }
 
 // winAuditRequest represents a Windows audit request.
@@ -193,6 +194,9 @@ type auditResponse struct {
 	Vulnerabilities []string      `json:"vulnerabilities,omitempty"`
 	Reasons         []AuditReason `json:"reasons,omitempty"`
 	CVEList         []string      `json:"cvelist,omitempty"`
+	// Details carries per-CVE objects (id/cvss/cvelist) returned by
+	// /api/v3/audit/kb so callers get CVSS without a second lookup.
+	Details []AuditVuln `json:"details,omitempty"`
 	// CVSS is returned as an object, not a simple float
 	CVSS          *CVSS  `json:"cvss,omitempty"`
 	CumulativeFix string `json:"cumulativeFix,omitempty"`
@@ -405,6 +409,8 @@ func (s *AuditService) KBAudit(ctx context.Context, os string, kbList []string, 
 	req := kbAuditRequest{
 		OS:  os,
 		KBs: kbList,
+		// Request per-CVE CVSS details so the result carries scored vulnerabilities.
+		Details: true,
 	}
 
 	var resp auditResponse
@@ -515,6 +521,21 @@ func (s *AuditService) convertResponse(resp *auditResponse) *AuditResult {
 				}
 			}
 		}
+	}
+
+	// KB audit (/api/v3/audit/kb) returns per-CVE objects with CVSS scores under
+	// "details"; convert them to vulnerabilities so callers get scores.
+	for i := range resp.Details {
+		d := &resp.Details[i]
+		result.Vulnerabilities = append(result.Vulnerabilities, Vulnerability{
+			Package:    d.Package,
+			BulletinID: d.BulletinID,
+			CVEList:    d.CVEList,
+			CVSS:       d.CVSS,
+			Fix:        d.Fix,
+			Version:    d.ProvidedVersion,
+			Operator:   d.Operator,
+		})
 	}
 
 	// If vulnerabilities list from response contains bulletin IDs, convert them

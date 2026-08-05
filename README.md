@@ -5,7 +5,6 @@ A Go client library for the [Vulners](https://vulners.com) vulnerability databas
 [![Version](https://img.shields.io/github/v/release/kidoz/go-vulners)](https://github.com/kidoz/go-vulners/releases/latest)
 [![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![Go Reference](https://pkg.go.dev/badge/github.com/kidoz/go-vulners.svg)](https://pkg.go.dev/github.com/kidoz/go-vulners)
-[![Go Report Card](https://goreportcard.com/badge/github.com/kidoz/go-vulners)](https://goreportcard.com/report/github.com/kidoz/go-vulners)
 
 ## Features
 

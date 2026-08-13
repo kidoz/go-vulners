@@ -21,6 +21,7 @@ type auditConfig struct {
 	includeAnyVersion bool
 	cveListMetrics    bool
 	osArch            string
+	osVersion         string
 	match             string
 	fields            []string
 	config            []string
@@ -87,6 +88,14 @@ func WithCVEListMetrics(v bool) AuditOption {
 func WithOSArch(arch string) AuditOption {
 	return func(c *auditConfig) {
 		c.osArch = arch
+	}
+}
+
+// WithOSVersion sets the operating-system version. Endpoints that do not audit
+// by version echo it back on the result, so a caller can label the finding.
+func WithOSVersion(version string) AuditOption {
+	return func(c *auditConfig) {
+		c.osVersion = version
 	}
 }
 

@@ -18,10 +18,14 @@ type SmartAuditResult struct {
 
 // SmartAuditItem represents the match and vulnerabilities for one submitted software string.
 type SmartAuditItem struct {
-	Input           string                    `json:"input"`
-	CPE             string                    `json:"cpe"`
-	PURLs           []string                  `json:"purls"`
-	Confidence      float64                   `json:"confidence"`
+	Input      string   `json:"input"`
+	CPE        string   `json:"cpe"`
+	PURLs      []string `json:"purls"`
+	Confidence float64  `json:"confidence"`
+	// FixedVersion is the version to upgrade to so that none of the listed
+	// advisories still applies. Empty when no matched criterion bounds the
+	// affected range from above.
+	FixedVersion    string                    `json:"fixedVersion,omitempty"`
 	Vulnerabilities []SmartAuditVulnerability `json:"vulnerabilities"`
 }
 
@@ -36,6 +40,13 @@ type SmartAuditVulnerability struct {
 	Published        *Time              `json:"published,omitempty"`
 	Modified         *Time              `json:"modified,omitempty"`
 	AIScore          *AIScore           `json:"ai_score,omitempty"`
+	// Returned when the corresponding field is requested. Without them the only
+	// severity available is AIScore, which cannot express KEV and tops out below
+	// the high band.
+	Metrics        *AdvisoryMetrics `json:"metrics,omitempty"`
+	Exploitation   *Exploitation    `json:"exploitation,omitempty"`
+	CVEList        []string         `json:"cvelist,omitempty"`
+	CVEListMetrics []CVEListMetric  `json:"cvelistMetrics,omitempty"`
 }
 
 // SmartAuditReason describes a CPE rule that caused a vulnerability to match.
@@ -57,6 +68,10 @@ type SmartAuditCriterion struct {
 type smartAuditRequest struct {
 	Software []string `json:"software"`
 	Catalog  string   `json:"catalog,omitempty"`
+	// Both spellings of the enrichment request are accepted by the endpoint;
+	// either is enough, and sending both is harmless.
+	Fields         []string `json:"fields,omitempty"`
+	CVEListMetrics bool     `json:"cvelistMetrics,omitempty"`
 }
 
 type smartAuditResponse struct {
@@ -89,8 +104,10 @@ func (s *AuditService) SmartAudit(ctx context.Context, software []string, opts .
 	}
 
 	req := smartAuditRequest{
-		Software: software,
-		Catalog:  cfg.catalog,
+		Software:       software,
+		Catalog:        cfg.catalog,
+		Fields:         cfg.fields,
+		CVEListMetrics: cfg.cveListMetrics,
 	}
 
 	var resp smartAuditResponse

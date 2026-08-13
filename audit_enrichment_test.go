@@ -235,3 +235,142 @@ func TestAdvisoryMetrics_AcceptsBothEPSSShapes(t *testing.T) {
 		t.Errorf("absent epss should stay nil: %+v / %v", empty.EPSS, err)
 	}
 }
+
+// linux and library advisories carry the rollup now; without it a caller has to
+// recompute a severity from the per-CVE entries, which is how every consumer
+// ended up with its own max-across-CVEs helper.
+func TestPackageAudit_AdvisoryRollupAndOptionReport(t *testing.T) {
+	var result PackageAuditResult
+	if err := json.Unmarshal([]byte(`{
+		"issues":[{"package":"openssl 3.0.13","version":"3.0.13","fixedVersion":"3.0.14",
+			"applicableAdvisories":[{"id":"USN-1","match":"<3.0.14","registry":"deb",
+				"metrics":{"cvss":{"score":9.8},"epss":[{"cve":"CVE-1","epss":0.4}]},
+				"exploitation":{"wildExploited":true},
+				"cvelistMetrics":[{"cve":"CVE-1","cvss":{"score":9.8},
+					"ssvc":{"options":[{"Exploitation":"active"}]}}]}]}],
+		"errors":{},"totalPackages":1,
+		"appliedOptions":["metrics","cvelistMetrics"],
+		"warnings":[{"option":"exploits","message":"not supported on this endpoint"}]
+	}`), &result); err != nil {
+		t.Fatal(err)
+	}
+	adv := result.Issues[0].ApplicableAdvisories[0]
+	if adv.Metrics == nil || adv.Metrics.CVSS.Score != 9.8 {
+		t.Fatalf("advisory rollup lost: %+v", adv.Metrics)
+	}
+	if len(adv.Metrics.EPSS) != 1 || adv.Metrics.EPSS[0].Epss != 0.4 {
+		t.Errorf("rollup epss lost: %+v", adv.Metrics.EPSS)
+	}
+	if adv.Exploitation == nil || !adv.Exploitation.WildExploited {
+		t.Errorf("KEV flag lost: %+v", adv.Exploitation)
+	}
+	metrics, err := adv.CVEMetrics()
+	if err != nil || metrics[0].SSVC.Exploitation() != SSVCExploitationActive {
+		t.Errorf("ssvc unreachable: %+v / %v", metrics, err)
+	}
+	if len(result.AppliedOptions) != 2 || result.AppliedOptions[0] != "metrics" {
+		t.Errorf("appliedOptions lost: %v", result.AppliedOptions)
+	}
+	if len(result.Warnings) != 1 || result.Warnings[0].Option != "exploits" {
+		t.Errorf("warnings lost: %+v", result.Warnings)
+	}
+}
+
+// The software and host endpoints return findings through Bulletin, which had
+// nowhere to put enrichment - so KEV could not reach a caller on those paths at
+// all, however the request was made.
+func TestSoftwareAudit_BulletinCarriesEnrichmentAndFix(t *testing.T) {
+	var result SoftwareAuditResult
+	if err := json.Unmarshal([]byte(`{"items":[{
+		"matched_criteria":"cpe:2.3:a:google:chrome:149.0.7827.89",
+		"fixed_version":"151.0.7922.138",
+		"vulnerabilities":[{"id":"GCSA-1",
+			"metrics":{"cvss":{"score":9.6}},
+			"exploitation":{"wildExploited":true},
+			"cvelistMetrics":[{"cve":"CVE-2026-11645",
+				"ssvc":{"options":[{"Exploitation":"active"}]}}]}]}]}`), &result); err != nil {
+		t.Fatal(err)
+	}
+	item := result.Items[0]
+	if item.FixedVersion != "151.0.7922.138" {
+		t.Errorf("fixed_version lost: %q", item.FixedVersion)
+	}
+	b := item.Vulnerabilities[0]
+	if b.Metrics == nil || b.Metrics.CVSS.Score != 9.6 {
+		t.Fatalf("bulletin metrics lost: %+v", b.Metrics)
+	}
+	if b.Exploitation == nil || !b.Exploitation.WildExploited {
+		t.Errorf("bulletin KEV lost: %+v", b.Exploitation)
+	}
+	if len(b.CVEListMetrics) != 1 || b.CVEListMetrics[0].SSVC.Exploitation() != SSVCExploitationActive {
+		t.Errorf("bulletin ssvc lost: %+v", b.CVEListMetrics)
+	}
+}
+
+// sbom advisories gain the per-CVE breakdown they lacked.
+func TestSBOMAudit_PerCVEBreakdownAndOptionReport(t *testing.T) {
+	var result SBOMAuditResult
+	if err := json.Unmarshal([]byte(`{"data":[{"package":"requests 2.19.1",
+		"applicableAdvisories":[{"id":"GHSA-1","type":"ghsa","match":"<2.20.0",
+			"title":"t","description":"d","published":"2018-01-01T00:00:00",
+			"cvelistMetrics":[{"cve":"CVE-2018-18074","cvss":{"score":7.5},
+				"ssvc":{"options":[{"Exploitation":"poc"}]}}]}]}],
+		"totalPackages":1,"appliedOptions":["cvelistMetrics"],"warnings":[]}`), &result); err != nil {
+		t.Fatal(err)
+	}
+	adv := result.Packages[0].ApplicableAdvisories[0]
+	if len(adv.CVEListMetrics) != 1 || adv.CVEListMetrics[0].CVE != "CVE-2018-18074" {
+		t.Fatalf("per-CVE breakdown lost: %+v", adv.CVEListMetrics)
+	}
+	if adv.CVEListMetrics[0].SSVC.Exploitation() != SSVCExploitationPOC {
+		t.Errorf("ssvc lost: %+v", adv.CVEListMetrics[0].SSVC)
+	}
+	if len(result.AppliedOptions) != 1 {
+		t.Errorf("appliedOptions lost: %v", result.AppliedOptions)
+	}
+}
+
+// The boolean switch was sent but `fields` was not, so the advisory rollup could
+// not be requested from here at all - the same silent drop the API itself was
+// fixed for, one layer up.
+func TestPackageAudits_SendFields(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		path string
+		call func(*Client) error
+	}{
+		{"linux", "/api/v4/audit/linux", func(c *Client) error {
+			_, err := c.Audit().LinuxAuditV4(context.Background(), "ubuntu", "24.04",
+				[]string{"openssl 3.0.13"}, WithAuditFields("metrics"))
+			return err
+		}},
+		{"library", "/api/v4/audit/library", func(c *Client) error {
+			_, err := c.Audit().LibraryAudit(context.Background(),
+				[]string{"pkg:pypi/requests@2.19.1"}, WithAuditFields("metrics"))
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var sent []string
+			client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != tc.path {
+					t.Fatalf("unexpected path %s", r.URL.Path)
+				}
+				var request struct {
+					Fields []string `json:"fields"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Fatal(err)
+				}
+				sent = request.Fields
+				_, _ = w.Write([]byte(`{"result":{"issues":[],"errors":{},"totalPackages":0}}`))
+			})
+			if err := tc.call(client); err != nil {
+				t.Fatal(err)
+			}
+			if len(sent) != 1 || sent[0] != "metrics" {
+				t.Errorf("fields not sent: %v", sent)
+			}
+		})
+	}
+}

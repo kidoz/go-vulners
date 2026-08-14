@@ -192,6 +192,18 @@ if err != nil {
 }
 fmt.Printf("Found %d Windows vulnerabilities\n", len(kbResult.Vulnerabilities))
 
+// Audit Windows KBs with the v4 endpoint, which groups the missing CVEs
+// under the updates that fix them
+kbV4Result, err := client.Audit().KBAuditV4(ctx, "Windows Server 2022", kbList,
+    vulners.WithAuditFields("metrics", "cvelistMetrics"),
+)
+if err != nil {
+    log.Fatal(err)
+}
+for _, issue := range kbV4Result.Items {
+    fmt.Printf("Install %s to fix %d advisories\n", issue.FixedPackage, len(issue.Advisories))
+}
+
 // Audit software CPEs
 software := []vulners.AuditItem{
     {Part: "a", Product: "apache", Version: "2.4.49"},

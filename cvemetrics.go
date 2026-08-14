@@ -76,17 +76,17 @@ func (s *SSVC) axis(name string) string {
 // MaxCVSS returns the highest CVSS base score across the entries, and whether
 // any entry carried one at all.
 func MaxCVSS(metrics []CVEListMetric) (float64, bool) {
-	var max float64
+	var best float64
 	var found bool
 	for _, m := range metrics {
 		if m.CVSS == nil {
 			continue
 		}
-		if !found || m.CVSS.Score > max {
-			max, found = m.CVSS.Score, true
+		if !found || m.CVSS.Score > best {
+			best, found = m.CVSS.Score, true
 		}
 	}
-	return max, found
+	return best, found
 }
 
 // CVEMetrics decodes the advisory's per-CVE metrics into typed entries.
@@ -94,7 +94,11 @@ func MaxCVSS(metrics []CVEListMetric) (float64, bool) {
 // The raw field predates this type and stays as it is so existing callers keep
 // compiling; this accessor is the typed way to read the same data. A malformed
 // entry yields an error rather than a partially filled struct.
-func (a AuditApplicableAdvisory) CVEMetrics() ([]CVEListMetric, error) {
+//
+// The receiver is a pointer because the advisory is a heavy struct: iterate the
+// advisory slice by index rather than by value, or the copy costs more than the
+// decode does.
+func (a *AuditApplicableAdvisory) CVEMetrics() ([]CVEListMetric, error) {
 	if len(a.CVEListMetrics) == 0 {
 		return nil, nil
 	}

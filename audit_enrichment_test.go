@@ -112,7 +112,7 @@ func TestMaxCVSS(t *testing.T) {
 
 // The raw field stays for compatibility; this is the typed way to read it.
 func TestAuditApplicableAdvisory_CVEMetrics(t *testing.T) {
-	adv := AuditApplicableAdvisory{
+	adv := &AuditApplicableAdvisory{
 		ID: "USN-1",
 		CVEListMetrics: []map[string]interface{}{
 			{"cve": "CVE-1", "cvss": map[string]interface{}{"score": 8.8},
@@ -131,7 +131,7 @@ func TestAuditApplicableAdvisory_CVEMetrics(t *testing.T) {
 	if metrics[0].SSVC.Exploitation() != SSVCExploitationPOC {
 		t.Errorf("SSVC = %q", metrics[0].SSVC.Exploitation())
 	}
-	if empty, err := (AuditApplicableAdvisory{}).CVEMetrics(); err != nil || empty != nil {
+	if empty, err := (&AuditApplicableAdvisory{}).CVEMetrics(); err != nil || empty != nil {
 		t.Errorf("absent metrics should decode to nil, got %v / %v", empty, err)
 	}
 }
@@ -254,7 +254,7 @@ func TestPackageAudit_AdvisoryRollupAndOptionReport(t *testing.T) {
 	}`), &result); err != nil {
 		t.Fatal(err)
 	}
-	adv := result.Issues[0].ApplicableAdvisories[0]
+	adv := &result.Issues[0].ApplicableAdvisories[0]
 	if adv.Metrics == nil || adv.Metrics.CVSS.Score != 9.8 {
 		t.Fatalf("advisory rollup lost: %+v", adv.Metrics)
 	}

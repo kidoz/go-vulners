@@ -31,6 +31,12 @@ type Bulletin struct {
 	Enchantments     json.RawMessage    `json:"enchantments,omitempty"`
 	Epss             []Epss             `json:"epss,omitempty"`
 	AffectedSoftware []AffectedSoftware `json:"affectedSoftware,omitempty"`
+	// Audit enrichment. Requested via fields on the audit endpoints; absent from
+	// search results. Without these a Bulletin returned by a software or host
+	// audit could not carry a severity rollup or the KEV flag at all.
+	Metrics        *AdvisoryMetrics `json:"metrics,omitempty"`
+	Exploitation   *Exploitation    `json:"exploitation,omitempty"`
+	CVEListMetrics []CVEListMetric  `json:"cvelistMetrics,omitempty"`
 
 	// Additional fields that may be present
 	Assigned      *Time          `json:"assigned,omitempty"`
@@ -264,7 +270,11 @@ type SoftwareAuditResult struct {
 type SoftwareAuditItem struct {
 	Input           json.RawMessage `json:"input,omitempty"`
 	MatchedCriteria string          `json:"matched_criteria,omitempty"`
-	Vulnerabilities []Bulletin      `json:"vulnerabilities,omitempty"`
+	// FixedVersion is the version to upgrade to so that none of the listed
+	// advisories still applies. This endpoint spells it in snake case, unlike
+	// the package family; the field name is preserved rather than harmonised.
+	FixedVersion    string     `json:"fixed_version,omitempty"`
+	Vulnerabilities []Bulletin `json:"vulnerabilities,omitempty"`
 }
 
 // PackageAuditResult represents a modern Linux or PURL library audit response.
@@ -272,6 +282,17 @@ type PackageAuditResult struct {
 	Issues        []PackageAuditIssue `json:"issues"`
 	Errors        map[int]string      `json:"errors"`
 	TotalPackages int                 `json:"totalPackages"`
+	// AppliedOptions and Warnings report what the server actually honoured.
+	// Endpoints accept options they cannot act on rather than rejecting them,
+	// so without this a dropped option looks exactly like an empty answer.
+	AppliedOptions []string       `json:"appliedOptions,omitempty"`
+	Warnings       []AuditWarning `json:"warnings,omitempty"`
+}
+
+// AuditWarning names a request option the endpoint accepted and did not act on.
+type AuditWarning struct {
+	Option  string `json:"option"`
+	Message string `json:"message"`
 }
 
 // PackageAuditIssue describes vulnerability matches for one audited package.
@@ -292,9 +313,14 @@ type AuditApplicableAdvisory struct {
 	Arch           []string                 `json:"arch,omitempty"`
 	Classifier     []string                 `json:"classifier,omitempty"`
 	CVEListMetrics []map[string]interface{} `json:"cvelistMetrics,omitempty"`
-	Operator       string                   `json:"operator,omitempty"`
-	Version        string                   `json:"version,omitempty"`
-	Published      string                   `json:"published,omitempty"`
+	// Advisory-level rollup and exploitation flag, returned when requested.
+	// Before these existed every consumer recomputed a severity from the
+	// per-CVE entries, each with its own helper.
+	Metrics      *AdvisoryMetrics `json:"metrics,omitempty"`
+	Exploitation *Exploitation    `json:"exploitation,omitempty"`
+	Operator     string           `json:"operator,omitempty"`
+	Version      string           `json:"version,omitempty"`
+	Published    string           `json:"published,omitempty"`
 }
 
 // CVEAuditIssue describes packages and CPE configurations affected by a CVE.
@@ -428,6 +454,10 @@ type SBOMAuditResult struct {
 	Packages      []SBOMPackageResult `json:"data"`
 	SummaryID     string              `json:"summaryId,omitempty"`
 	TotalPackages int                 `json:"totalPackages"`
+	// See PackageAuditResult: what the server honoured, and what it accepted
+	// and then did not act on.
+	AppliedOptions []string       `json:"appliedOptions,omitempty"`
+	Warnings       []AuditWarning `json:"warnings,omitempty"`
 }
 
 // SBOMPackageResult represents audit findings for a single package in an SBOM.
@@ -458,18 +488,21 @@ type Exploitation struct {
 
 // SBOMAdvisory represents a security advisory applicable to an SBOM package.
 type SBOMAdvisory struct {
-	ID               string          `json:"id"`
-	Type             string          `json:"type"`
-	Match            string          `json:"match"`
-	Title            string          `json:"title"`
-	Description      string          `json:"description"`
-	AIDescription    string          `json:"aiDescription,omitempty"`
-	Published        *Time           `json:"published"`
-	CVEList          []string        `json:"cvelist,omitempty"`
-	EPSS             []Epss          `json:"epss,omitempty"`
-	AIScore          *AIScore        `json:"aiScore,omitempty"`
-	Metrics          *SBOMMetrics    `json:"metrics,omitempty"`
-	Exploitation     *Exploitation   `json:"exploitation,omitempty"`
+	ID            string        `json:"id"`
+	Type          string        `json:"type"`
+	Match         string        `json:"match"`
+	Title         string        `json:"title"`
+	Description   string        `json:"description"`
+	AIDescription string        `json:"aiDescription,omitempty"`
+	Published     *Time         `json:"published"`
+	CVEList       []string      `json:"cvelist,omitempty"`
+	EPSS          []Epss        `json:"epss,omitempty"`
+	AIScore       *AIScore      `json:"aiScore,omitempty"`
+	Metrics       *SBOMMetrics  `json:"metrics,omitempty"`
+	Exploitation  *Exploitation `json:"exploitation,omitempty"`
+	// Per-CVE breakdown, returned when requested. The advisory-level fields say
+	// how bad the advisory is; only this says which CVE in it is the exploited one.
+	CVEListMetrics   []CVEListMetric `json:"cvelistMetrics,omitempty"`
 	Enchantments     json.RawMessage `json:"enchantments,omitempty"`
 	WebApplicability json.RawMessage `json:"webApplicability,omitempty"`
 	References       []string        `json:"references,omitempty"`

@@ -21,6 +21,7 @@ type auditConfig struct {
 	includeAnyVersion bool
 	cveListMetrics    bool
 	osArch            string
+	osVersion         string
 	match             string
 	fields            []string
 	config            []string
@@ -90,6 +91,14 @@ func WithOSArch(arch string) AuditOption {
 	}
 }
 
+// WithOSVersion sets the operating-system version. Endpoints that do not audit
+// by version echo it back on the result, so a caller can label the finding.
+func WithOSVersion(version string) AuditOption {
+	return func(c *auditConfig) {
+		c.osVersion = version
+	}
+}
+
 // softwareAuditRequest represents a software audit request.
 type softwareAuditRequest struct {
 	Software []AuditItem `json:"software"`
@@ -127,6 +136,9 @@ type linuxAuditV4Request struct {
 	IncludeCandidates bool     `json:"includeCandidates,omitempty"`
 	IncludeAnyVersion bool     `json:"includeAnyVersion,omitempty"`
 	CVEListMetrics    bool     `json:"cvelistMetrics,omitempty"`
+	// The endpoint accepts `fields` alongside the boolean; without it the
+	// advisory-level rollup cannot be requested at all from here.
+	Fields []string `json:"fields,omitempty"`
 }
 
 // libraryAuditRequest represents a PURL library audit request.
@@ -136,6 +148,9 @@ type libraryAuditRequest struct {
 	IncludeCandidates bool     `json:"includeCandidates,omitempty"`
 	IncludeAnyVersion bool     `json:"includeAnyVersion,omitempty"`
 	CVEListMetrics    bool     `json:"cvelistMetrics,omitempty"`
+	// The endpoint accepts `fields` alongside the boolean; without it the
+	// advisory-level rollup cannot be requested at all from here.
+	Fields []string `json:"fields,omitempty"`
 }
 
 type cveAuditRequest struct {
@@ -332,6 +347,7 @@ func (s *AuditService) LinuxAuditV4(ctx context.Context, osName, osVersion strin
 		IncludeCandidates: auditBool(cfg.includeCandidates),
 		IncludeAnyVersion: cfg.includeAnyVersion,
 		CVEListMetrics:    cfg.cveListMetrics,
+		Fields:            cfg.fields,
 	}
 
 	var resp packageAuditV4Response
@@ -358,6 +374,7 @@ func (s *AuditService) LibraryAudit(ctx context.Context, packages []string, opts
 		IncludeCandidates: auditBool(cfg.includeCandidates),
 		IncludeAnyVersion: cfg.includeAnyVersion,
 		CVEListMetrics:    cfg.cveListMetrics,
+		Fields:            cfg.fields,
 	}
 
 	var resp packageAuditV4Response

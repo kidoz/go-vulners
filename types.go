@@ -468,11 +468,15 @@ type SBOMPackageResult struct {
 	ApplicableAdvisories []SBOMAdvisory `json:"applicableAdvisories"`
 }
 
-// SBOMMetrics contains CVSS scoring information for an SBOM advisory.
-type SBOMMetrics struct {
-	CVSS *CVSS    `json:"cvss,omitempty"`
-	EPSS []string `json:"epss,omitempty"`
-}
+// SBOMMetrics is the advisory-level metrics block on the SBOM path.
+//
+// It used to declare EPSS as []string, which described what audit/sbom actually
+// sent rather than what it meant to: that endpoint never swapped the stored CVE
+// ids for EPSS records, so bare ids were all a client ever saw there. The server
+// side of that is fixed, and the two types have nothing left to disagree about,
+// so this is an alias - the SBOM path now gets the same tolerant parsing as
+// every other endpoint.
+type SBOMMetrics = AdvisoryMetrics
 
 // ExploitationSource identifies a source that reported wild exploitation.
 type ExploitationSource struct {

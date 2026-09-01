@@ -115,17 +115,27 @@ func (a *AuditApplicableAdvisory) CVEMetrics() ([]CVEListMetric, error) {
 
 // AdvisoryMetrics is the advisory-level rollup: the highest severity across the
 // advisory's CVEs, maintained server-side rather than recomputed by the client.
+//
+// Both halves answer the same question. CVSS is the highest score; EPSS is the
+// highest probability, carried as a one-element slice because the field is an
+// array everywhere in the API. For every CVE's own score ask for
+// cvelistMetrics - that is the one place the full listing lives.
 type AdvisoryMetrics struct {
 	CVSS *CVSS  `json:"cvss,omitempty"`
 	EPSS []Epss `json:"epss,omitempty"`
 }
 
-// UnmarshalJSON accepts both shapes the API produces for `metrics.epss`.
+// UnmarshalJSON accepts both shapes `metrics.epss` has been seen in.
 //
-// Normally it is a list of EPSS records. When the EPSS store is slow or
-// unavailable the endpoint degrades to serving the bare CVE ids instead of
-// failing the request, so a client that only handles records breaks exactly when
-// the platform is already having a bad day.
+// Records are the only shape the API is meant to produce. Bare CVE ids were a
+// server-side bug on audit/smart and audit/sbom, where the stored ids were never
+// swapped for live records - not, as the comment here used to claim, a graceful
+// degradation of the EPSS store. That is fixed server-side; a degraded store now
+// yields an empty array.
+//
+// The tolerance stays because an SDK release cannot assume which build of the
+// API it is talking to, and a client pinned to an older deployment should keep
+// working rather than fail on the shape it has always received.
 func (m *AdvisoryMetrics) UnmarshalJSON(data []byte) error {
 	var raw struct {
 		CVSS *CVSS             `json:"cvss,omitempty"`

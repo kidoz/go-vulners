@@ -209,8 +209,9 @@ func TestKBAuditV4_Validation(t *testing.T) {
 	}
 }
 
-// The endpoint serves metrics.epss as records, but degrades to bare CVE ids when
-// the EPSS store is slow - which is exactly when a client must not start failing.
+// Records are the shape the API is meant to produce. Bare ids were a server-side
+// bug on audit/smart and audit/sbom; it is fixed, but an SDK release cannot
+// assume which deployment it is talking to, so both shapes stay parseable.
 func TestAdvisoryMetrics_AcceptsBothEPSSShapes(t *testing.T) {
 	var records AdvisoryMetrics
 	if err := json.Unmarshal([]byte(
@@ -233,6 +234,38 @@ func TestAdvisoryMetrics_AcceptsBothEPSSShapes(t *testing.T) {
 	var empty AdvisoryMetrics
 	if err := json.Unmarshal([]byte(`{"cvss":{"score":1}}`), &empty); err != nil || empty.EPSS != nil {
 		t.Errorf("absent epss should stay nil: %+v / %v", empty.EPSS, err)
+	}
+}
+
+// audit/sbom used to be the one endpoint whose metrics.epss was declared
+// []string, because it never resolved the stored ids and bare ids were all it
+// ever sent. Now it answers like the rest, and the SBOM path has to parse that.
+func TestSBOMMetrics_ParsesEPSSRecords(t *testing.T) {
+	var metrics SBOMMetrics
+	if err := json.Unmarshal([]byte(
+		`{"cvss":{"score":10},"epss":[{"cve":"CVE-2021-44228","epss":0.975,"percentile":0.999,"date":"2026-08-11"}]}`,
+	), &metrics); err != nil {
+		t.Fatalf("sbom metrics must parse EPSS records: %v", err)
+	}
+	if len(metrics.EPSS) != 1 || metrics.EPSS[0].Cve != "CVE-2021-44228" {
+		t.Fatalf("record lost: %+v", metrics.EPSS)
+	}
+	if metrics.EPSS[0].Epss != 0.975 || metrics.EPSS[0].Percentile != 0.999 {
+		t.Fatalf("score or percentile lost: %+v", metrics.EPSS[0])
+	}
+
+	// The advisory-level answer carries the highest CVE, not the whole listing.
+	if len(metrics.EPSS) > 1 {
+		t.Errorf("metrics.epss is a rollup, got %d records", len(metrics.EPSS))
+	}
+
+	// Older deployments still send ids on this path; they must not break a client.
+	var legacy SBOMMetrics
+	if err := json.Unmarshal([]byte(`{"cvss":{"score":10},"epss":["CVE-2021-44228"]}`), &legacy); err != nil {
+		t.Fatalf("legacy id shape must still parse: %v", err)
+	}
+	if len(legacy.EPSS) != 1 || legacy.EPSS[0].Cve != "CVE-2021-44228" {
+		t.Fatalf("legacy id lost: %+v", legacy.EPSS)
 	}
 }
 
